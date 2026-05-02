@@ -1,40 +1,37 @@
-# AuditLend
+# AuditLend Intelligence Core (ALICe)
 
-Auditable credit decision engine with deterministic failure simulation, idempotent intake, asynchronous processing, encrypted PII storage, immutable audit logs, calibrated decision confidence, and human-readable explanations.
+AuditLend Intelligence Core (ALICe) is an auditable credit decision engine with deterministic failure simulation, idempotent intake, asynchronous processing, encrypted PII storage, immutable audit logs, calibrated decision confidence, human-readable explanations, and an opt-in ML scorer with fallback guardrails.
 
-This repository is a production-readiness reference implementation. It is built and tested end to end with local infrastructure, mock external providers, Docker Compose, PostgreSQL, Redis, FastAPI, and Celery. It is not wired to real credit bureaus or real lending portfolios, and its current risk score is governed and deterministic but not empirically calibrated on historical default data.
+This repository is a production-readiness reference implementation. It is built around local infrastructure, deterministic mock providers, Docker Compose, PostgreSQL, Redis, FastAPI, Celery, and a governed ML stack trained on Lending Club historical data. It is not wired to real credit bureaus or real lending portfolios, and its ML results are currently validated through local smoke-scale evaluation rather than full production-grade model governance.
 
 ## Current Status
 
-Last verified locally: **2026-04-29**
+Last verified locally: **2026-05-03**
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Docker stack | PASS | `docker compose up --build -d`; API, worker, Redis, Postgres, mocks, and Flower started |
-| Service health | PASS | API `/health` returned `200`; worker `/health` returned `200`; all core compose services reported healthy |
-| Authentication | PASS | Protected status endpoint returned `401` without key and `404` with valid read key for a missing app |
-| Metrics | PASS | `/metrics` returned Prometheus output with `auditlend_*` metrics |
-| Full test suite | PASS | `124 passed`, `0 skipped` |
-| Coverage gate | PASS | `87.24%`, above the configured `85%` threshold |
-| Live end-to-end smoke | PASS | API intake -> outbox -> Celery worker -> mock services -> decision -> audit -> explanation |
+| Full repository test suite | PASS | `./.venv/bin/pytest tests -q` -> `142 passed`, `17 skipped` |
+| Unit suite | PASS | `./.venv/bin/pytest tests/unit -q` -> `140 passed` |
+| Integration + chaos slice | PASS | `./.venv/bin/pytest tests/integration tests/chaos -q` -> `2 passed`, `17 skipped` |
+| Coverage report | INFO | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `78%` |
+| Phase 9 benchmark smoke | PASS | `python -m ml.benchmark.heuristic_vs_ml --manifest-path ml/models/experiments/20260502T184238Z-smoke3/manifest.json --max-rows-per-split 200 --modulo-sampling 64` |
 
-Live smoke result from the final verification run:
+The current focused ML smoke benchmark from the May 3, 2026 verification run:
 
 ```json
 {
-  "status": "COMPLETED",
-  "decision": "APPROVE",
-  "confidence": 0.7,
-  "data_reliability": 1.0,
-  "risk_score": 64.1,
-  "rule_version": "RULE_SET_V1"
+  "heuristic": {
+    "approval_rate": 0.805,
+    "default_rate_on_approved": 0.142857,
+    "simulated_profit": -17195.0
+  },
+  "ml": {
+    "approval_rate": 0.68,
+    "default_rate_on_approved": 0.014706,
+    "simulated_profit": 206466.0
+  },
+  "profit_delta_ml_minus_heuristic": 223661.0
 }
-```
-
-The explanation endpoint returned an audit-derived timeline:
-
-```text
-PROCESSING_STARTED -> CREDIT_BUREAU_FETCH -> GST_VERIFIER_FETCH -> BANK_ANALYZER_FETCH -> DECISION_CALCULATION
 ```
 
 ## What Is Actually Implemented
@@ -61,6 +58,16 @@ PROCESSING_STARTED -> CREDIT_BUREAU_FETCH -> GST_VERIFIER_FETCH -> BANK_ANALYZER
   - calibrated `confidence`
 - GST non-compliance gate that prevents automatic approval when GST mismatch is explicit.
 - Manual review override when calibrated confidence falls below threshold.
+- `RULE_SET_V2` path for ML-backed decisions with heuristic shadow scoring and deterministic fallback.
+
+### ML Platform
+
+- Lending Club ingestion, feature engineering, and time-based splitting under `ml/data/`.
+- Model training, evaluation, and isotonic calibration under `ml/models/`.
+- SHAP-based per-prediction explainability under `ml/explain/`.
+- File-backed model registry and KS-based drift detection under `ml/governance/`.
+- Deterministic A/B routing plus heuristic-versus-ML benchmark utilities.
+- `ML_SCORING` audit entries with `model_version`, `scoring_strategy`, fallback reason, and feature contributions.
 
 ### Security and Data Protection
 
@@ -86,7 +93,7 @@ PROCESSING_STARTED -> CREDIT_BUREAU_FETCH -> GST_VERIFIER_FETCH -> BANK_ANALYZER
 - Configurable external API timeout.
 - Worker health endpoint on port `8004`.
 - Structured JSON logs.
-- Prometheus metrics for applications, external calls, circuit breaker state, decision confidence, task duration, and task failures.
+- Prometheus metrics for applications, external calls, circuit breaker state, decision confidence, task duration, task failures, drift alerts, and A/B experiment arms.
 
 ### Deterministic Mocks
 
@@ -102,7 +109,8 @@ For identical inputs, mock responses are deterministic. Request IDs are input-de
 
 This is important. AuditLend is built end to end, but it is not a drop-in live lending system without additional institutional controls.
 
-- The scorecard is deterministic and governed, but it is not empirically calibrated against a real repayment/default dataset.
+- The heuristic scorecard remains deterministic and governed, but it is not itself empirically calibrated against a real repayment/default dataset.
+- The ML stack is implemented end to end, but the current published metrics come from capped local smoke runs rather than a full production certification workflow.
 - Mock APIs are deterministic test doubles, not real provider integrations.
 - API key auth is suitable for this reference stack, but a real deployment should use OAuth2/OIDC, scoped service identities, mTLS, and centralized secret management.
 - Docker Compose is a local/demo deployment target, not a production orchestrator.
@@ -155,8 +163,8 @@ Celery Worker
 | `migrations/` | Alembic migrations |
 | `mock_apis/` | Deterministic external-provider mocks |
 | `tests/` | Unit, integration, and chaos tests |
-| `docs/CALIBRATION.md` | Current scorecard calibration status and rule-set governance notes |
-| `ml/` | Phase 1 ML foundation, dataset docs, and training scaffolding |
+| `docs/CALIBRATION.md` | Heuristic and ML calibration notes, smoke metrics, and rule-set governance |
+| `ml/` | Data, models, explainability, governance, benchmark scripts, and developer docs |
 
 ## ML Data Setup
 
@@ -169,6 +177,36 @@ export LENDING_CLUB_DATA_PATH="ml/data/raw/accepted_2007_to_2018Q4.csv.gz"
 ```
 
 If your local Kaggle export is still unpacked into nested folders, point `LENDING_CLUB_DATA_PATH` at the real CSV path instead. See `ml/data/README.md` for the canonical path and download notes.
+
+For the full ML workflow, including training, calibration, explanation, registry, drift, and benchmark commands, see `ml/README.md`.
+
+## ML Model Performance
+
+The latest local smoke-scale ML artifacts were produced from the capped run `20260502T184238Z-smoke3`. These are useful as engineering verification signals, not as final production certification numbers.
+
+Held-out evaluation metrics from `ml/models/reports/20260502T184238Z-smoke3_evaluation.md`:
+
+- Test AUC-ROC: `0.975706`
+- Test AUC-PR: `0.944672`
+- Test Brier score: `0.026101`
+- Test ECE: `0.027782`
+
+Calibration metrics from `ml/models/reports/20260502T184238Z-smoke3_calibration.md`:
+
+- Raw test ECE: `0.027782`
+- Calibrated test ECE: `0.027866`
+- Raw test Brier: `0.026101`
+- Calibrated test Brier: `0.026105`
+
+Benchmark metrics from `ml/benchmark/reports/20260502T184238Z-smoke3_heuristic_vs_ml.md`:
+
+- Heuristic approval rate: `0.8050`
+- ML approval rate: `0.6800`
+- Heuristic default rate on approved loans: `0.1429`
+- ML default rate on approved loans: `0.0147`
+- Simulated profit delta, ML minus heuristic: `223661.00`
+
+These numbers come from a capped `200`-row test split with deterministic local scoring assumptions, so they should be treated as implementation smoke results rather than final business sign-off.
 
 Install ML-only dependencies separately from the core API/runtime stack:
 
@@ -308,7 +346,10 @@ Expected shape:
   "confidence": 0.7,
   "data_reliability": 1.0,
   "risk_score": 64.1,
-  "rule_version": "RULE_SET_V1"
+  "rule_version": "RULE_SET_V1",
+  "model_version": null,
+  "scoring_strategy": "heuristic",
+  "ab_test_arm": null
 }
 ```
 
@@ -512,10 +553,12 @@ Requires read scope.
   "factors": [
     {"name": "Risk Score", "value": "64.10", "status": "computed"}
   ],
+  "model_factor_contributions": [],
   "timeline": [
     {"step": "DECISION_CALCULATION", "status": "APPROVE", "timestamp": "timestamp"}
   ],
   "rule_version": "RULE_SET_V1",
+  "model_version": null,
   "generated_at": "timestamp"
 }
 ```
@@ -533,6 +576,10 @@ Prometheus series include:
 - `auditlend_decision_confidence`
 - `auditlend_task_duration_seconds`
 - `auditlend_task_failures_total`
+- `auditlend_drift_alerts_total`
+- `auditlend_ab_assignments_total`
+- `auditlend_ab_decisions_total`
+- `auditlend_ab_decision_confidence`
 
 ### Error Format
 
@@ -588,19 +635,17 @@ python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Run the full verified test command:
+Run the broad verification command used for the latest Phase 10 pass:
 
 ```bash
-.venv/bin/python -m pytest tests/ -v --cov=. --cov-fail-under=85 -rs
+.venv/bin/pytest tests -q
 ```
 
-Final verified result:
+Latest result:
 
 ```text
-124 passed
-0 skipped
-Required test coverage of 85% reached
-Total coverage: 87.24%
+142 passed
+17 skipped
 ```
 
 Run only unit tests:
@@ -608,6 +653,26 @@ Run only unit tests:
 ```bash
 .venv/bin/python -m pytest tests/unit -q
 ```
+
+Latest unit-only result:
+
+```text
+140 passed
+```
+
+Run the same repository-wide suite with the current local coverage report:
+
+```bash
+.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term
+```
+
+Latest coverage result:
+
+```text
+TOTAL 78%
+```
+
+That `78%` is the real number from the May 3, 2026 run. It is below the earlier documented `85%` threshold, so the README now records the actual local verification outcome rather than the older heuristic-only figure.
 
 Run integration and chaos tests with live Postgres/Redis:
 
@@ -646,10 +711,16 @@ The workflow provisions Postgres and Redis, runs migrations, sets required crypt
 
 ## Rule Governance
 
-Current active rule set:
+Default heuristic rule set:
 
 ```text
 RULE_SET_V1
+```
+
+ML-assisted decisions use:
+
+```text
+RULE_SET_V2
 ```
 
 Rule sets are immutable dataclasses in `engine/rule_sets.py`. Changing weights or thresholds should create a new rule set version and update `docs/CALIBRATION.md`.
@@ -657,8 +728,8 @@ Rule sets are immutable dataclasses in `engine/rule_sets.py`. Changing weights o
 Current calibration status:
 
 - `RULE_SET_V1` uses SME-derived heuristic weights.
-- It is deterministic and test-covered.
-- It still needs empirical validation against historical repayment/default data before live lending use.
+- `RULE_SET_V2` is the ML-assisted scoring path activated only when ML is enabled or when the A/B assignment routes traffic to the ML arm.
+- The ML stack is implemented, calibrated, benchmarked, and audit-linked, but the published metrics are still local smoke-scale validation numbers.
 
 ## Operational Notes
 
