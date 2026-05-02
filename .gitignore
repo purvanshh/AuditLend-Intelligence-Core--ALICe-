@@ -88,3 +88,7 @@ ml/data/raw/*
 *.h5
 *.model
 *.pt
+ml/models/experiments/*
+!ml/models/experiments/.gitkeep
+ml/models/artifacts/*
+!ml/models/artifacts/.gitkeep
