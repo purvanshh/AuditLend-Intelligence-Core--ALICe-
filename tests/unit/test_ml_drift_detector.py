@@ -63,3 +63,20 @@ def test_detect_feature_drift_from_snapshot_reuses_saved_distribution() -> None:
     assert report.total_features == 1
     assert report.alert_count == 1
     assert report.to_audit_payload()["drifted_features"][0]["feature_name"] == "credit_score_midpoint"
+
+
+def test_detect_feature_drift_from_snapshot_accepts_single_feature_row_mapping() -> None:
+    snapshot = {
+        "loan_amount_to_income": [0.10, 0.11, 0.12, 0.09] * 30,
+    }
+    candidate_row = {"loan_amount_to_income": 1.50}
+
+    report = detect_feature_drift_from_snapshot(
+        snapshot,
+        candidate_row,
+        model_version="XGB_V1",
+        feature_names=("loan_amount_to_income",),
+    )
+
+    assert report.alert_count == 1
+    assert report.drifted_features[0].feature_name == "loan_amount_to_income"

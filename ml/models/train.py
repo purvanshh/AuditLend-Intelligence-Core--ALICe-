@@ -33,6 +33,8 @@ OFFICIAL_MODEL_VERSION = "XGB_V1"
 OFFICIAL_MODEL_ARTIFACT_PATH = Path("ml/models/XGB_V1_model.pkl")
 OFFICIAL_CALIBRATOR_ARTIFACT_PATH = Path("ml/models/XGB_V1_calibrator.pkl")
 OFFICIAL_FEATURE_SPEC_PATH = Path("ml/models/XGB_V1_features.json")
+OFFICIAL_REFERENCE_SNAPSHOT_PATH = Path("ml/models/XGB_V1_reference_snapshot.json")
+OFFICIAL_REFERENCE_SNAPSHOT_SAMPLE_ROWS = 25_000
 OFFICIAL_MANIFEST_PATH = Path("ml/models/manifest.yaml")
 OFFICIAL_SEARCH_RESULTS_PATH = Path("ml/models/XGB_V1_search_results.jsonl")
 OFFICIAL_INPUT_FEATURES: tuple[str, ...] = MODEL_NUMERIC_FEATURES + MODEL_CATEGORICAL_FEATURES
@@ -166,6 +168,7 @@ class OfficialTrainingSummary:
     model_artifact_path: str
     calibrator_artifact_path: str
     feature_spec_path: str
+    reference_snapshot_path: str
     manifest_path: str
     search_results_path: str
 
@@ -841,9 +844,11 @@ def train_official_xgb_v1(
         "input_feature_columns": list(OFFICIAL_INPUT_FEATURES),
         "numeric_feature_columns": list(MODEL_NUMERIC_FEATURES),
         "categorical_feature_columns": list(MODEL_CATEGORICAL_FEATURES),
+        "proxy_feature_columns": list(OFFICIAL_PROXY_FEATURES),
         "encoded_feature_names": final_model.get_feature_names(),
     }
     OFFICIAL_FEATURE_SPEC_PATH.write_text(json.dumps(feature_spec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    reference_snapshot_path = write_official_reference_snapshot(prepared_dataset)
 
     write_experiment_log(OFFICIAL_SEARCH_RESULTS_PATH, search_rows)
     top_feature_importance = extract_feature_importance(final_model, final_model.get_feature_names())[:25]
@@ -869,11 +874,54 @@ def train_official_xgb_v1(
         model_artifact_path=str(OFFICIAL_MODEL_ARTIFACT_PATH),
         calibrator_artifact_path=str(OFFICIAL_CALIBRATOR_ARTIFACT_PATH),
         feature_spec_path=str(OFFICIAL_FEATURE_SPEC_PATH),
+        reference_snapshot_path=str(reference_snapshot_path),
         manifest_path=str(OFFICIAL_MANIFEST_PATH),
         search_results_path=str(OFFICIAL_SEARCH_RESULTS_PATH),
     )
     OFFICIAL_MANIFEST_PATH.write_text(json.dumps(asdict(summary), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
+
+
+def write_official_reference_snapshot(
+    prepared_dataset: OfficialPreparedDataset,
+    *,
+    output_path: str | Path = OFFICIAL_REFERENCE_SNAPSHOT_PATH,
+    max_rows: int = OFFICIAL_REFERENCE_SNAPSHOT_SAMPLE_ROWS,
+) -> Path:
+    """Persist the official training-distribution snapshot for live drift checks."""
+
+    from ml.governance.drift_detector import build_reference_feature_snapshot
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    train_frame = prepared_dataset.split_frames["train"]
+    sampled_train_frame = _deterministic_search_slice(train_frame, max_rows=max_rows)
+    train_rows = sampled_train_frame.loc[:, list(MODEL_NUMERIC_FEATURES)].to_dict(orient="records")
+    snapshot = build_reference_feature_snapshot(train_rows, feature_names=MODEL_NUMERIC_FEATURES)
+    output.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return output
+
+
+def ensure_official_reference_snapshot(
+    *,
+    env_var: str = "LENDING_CLUB_DATA_PATH",
+    manifest_path: str | Path = OFFICIAL_MANIFEST_PATH,
+) -> Path:
+    """Create the official drift-reference snapshot and attach it to the manifest."""
+
+    manifest_file = Path(manifest_path)
+    existing_manifest = load_json_file(manifest_file) if manifest_file.exists() else {}
+    existing_path = existing_manifest.get("reference_snapshot_path")
+    if existing_path and Path(str(existing_path)).exists():
+        return Path(str(existing_path))
+
+    prepared_dataset = prepare_official_training_dataset(env_var=env_var)
+    snapshot_path = write_official_reference_snapshot(prepared_dataset)
+    if manifest_file.exists():
+        updated_manifest = dict(existing_manifest)
+        updated_manifest["reference_snapshot_path"] = str(snapshot_path)
+        manifest_file.write_text(json.dumps(updated_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return snapshot_path
 
 
 def _build_official_feature_chunk(raw_chunk):
@@ -1083,6 +1131,10 @@ def _deterministic_search_slice(frame, *, max_rows: int):
     if len(sliced) < max_rows:
         return frame.head(max_rows).copy()
     return sliced
+
+
+def load_json_file(path: str | Path) -> dict[str, Any]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

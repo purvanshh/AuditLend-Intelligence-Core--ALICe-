@@ -159,6 +159,17 @@ def test_full_worker_pipeline_ml_path_writes_audit_entry(monkeypatch, clean_data
                     }
                 ],
                 model_summary="Model factors: Credit Score (790) reduced predicted default risk.",
+                drift_report={
+                    "status": "WARNING",
+                    "model_version": "XGB_V1",
+                    "alert_count": 1,
+                    "drifted_features": [
+                        {
+                            "feature_name": "loan_amount_to_income",
+                            "p_value": 0.001,
+                        }
+                    ],
+                },
             )
 
     monkeypatch.setenv("ML_ENABLED", "true")
@@ -185,7 +196,13 @@ def test_full_worker_pipeline_ml_path_writes_audit_entry(monkeypatch, clean_data
             text("SELECT output_snapshot FROM audit_logs WHERE application_id = :id AND step = 'ML_SCORING'"),
             {"id": application_id},
         ).scalar_one()
+        drift_snapshot = connection.execute(
+            text("SELECT output_snapshot FROM audit_logs WHERE application_id = :id AND step = 'DRIFT_DETECTED'"),
+            {"id": application_id},
+        ).scalar_one()
 
     assert "ML_SCORING" in steps
+    assert "DRIFT_DETECTED" in steps
     assert ml_snapshot["model_version"] == "XGB_V1"
     assert ml_snapshot["fallback_used"] is False
+    assert drift_snapshot["status"] == "WARNING"

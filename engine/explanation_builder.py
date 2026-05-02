@@ -41,6 +41,7 @@ def _summary(
         for entry in audit_entries
         if entry.error_type is not None or entry.fallback_used
     ]
+    drift_steps = [entry for entry in audit_entries if entry.step == "DRIFT_DETECTED"]
     threshold_reason = any(
         "Confidence below threshold" in str(factor)
         for factor in decision_output.get("factors", [])
@@ -54,7 +55,7 @@ def _summary(
             f"{causes} Confidence {confidence_text} is below the required threshold, "
             "so this application has been sent for manual review."
         )
-        return _append_model_summary(summary, model_details)
+        return _append_warning_and_model_summary(summary, drift_steps, model_details)
 
     if degraded_steps:
         causes = _degradation_sentence(degraded_steps)
@@ -62,10 +63,10 @@ def _summary(
             f"Decision {decision} was produced with degraded data quality. "
             f"{causes} Confidence is {_confidence_text(confidence)}."
         )
-        return _append_model_summary(summary, model_details)
+        return _append_warning_and_model_summary(summary, drift_steps, model_details)
 
     summary = f"Decision {decision} was produced from verified data sources with confidence {_confidence_text(confidence)}."
-    return _append_model_summary(summary, model_details)
+    return _append_warning_and_model_summary(summary, drift_steps, model_details)
 
 
 def _degradation_sentence(entries: list[AuditLog]) -> str:
@@ -158,6 +159,30 @@ def _append_model_summary(summary: str, model_details: dict[str, Any]) -> str:
     if not model_summary:
         return summary
     return f"{summary} {model_summary}"
+
+
+def _append_warning_and_model_summary(
+    summary: str,
+    drift_steps: list[AuditLog],
+    model_details: dict[str, Any],
+) -> str:
+    summary_with_warning = _append_drift_summary(summary, drift_steps)
+    return _append_model_summary(summary_with_warning, model_details)
+
+
+def _append_drift_summary(summary: str, drift_steps: list[AuditLog]) -> str:
+    if not drift_steps:
+        return summary
+    latest = drift_steps[-1]
+    drifted_features = [
+        str(row.get("feature_name"))
+        for row in (latest.output_snapshot or {}).get("drifted_features", [])
+        if row.get("feature_name")
+    ]
+    if drifted_features:
+        featured_text = ", ".join(drifted_features[:3])
+        return f"{summary} An ML drift warning was recorded for {featured_text}."
+    return f"{summary} An ML drift warning was recorded during scoring."
 
 
 def _model_summary_from_contributions(contributions: list[dict[str, Any]]) -> str | None:

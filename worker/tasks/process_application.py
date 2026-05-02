@@ -372,6 +372,29 @@ def _store_processing_results(
                 rule_version="RULE_SET_V2",
                 session=session,
             )
+            if decision_output.ml_drift_report and int(decision_output.ml_drift_report.get("alert_count", 0)) > 0:
+                write_audit_entry(
+                    application_id=application_id,
+                    step="DRIFT_DETECTED",
+                    input_snapshot={
+                        "features": audit_safe_features(
+                            audit_user_data,
+                            _risk_score_audit_breakdown(
+                                audit_user_data,
+                                decision_output,
+                                credit_result,
+                                bank_result,
+                                gst_result,
+                            ),
+                        ),
+                    },
+                    output_snapshot={
+                        "status": "WARNING",
+                        **decision_output.ml_drift_report,
+                    },
+                    rule_version="RULE_SET_V2",
+                    session=session,
+                )
 
         write_audit_entry(
             application_id=application_id,

@@ -89,6 +89,18 @@ def test_explanation_endpoint_reads_from_audit_trail(api_client, clean_database)
         )
         write_audit_entry(
             application_id=application_id,
+            step="DRIFT_DETECTED",
+            output_snapshot={
+                "status": "WARNING",
+                "drifted_features": [
+                    {"feature_name": "loan_amount_to_income"},
+                ],
+            },
+            rule_version="RULE_SET_V2",
+            session=session,
+        )
+        write_audit_entry(
+            application_id=application_id,
             step="ML_SCORING",
             output_snapshot={
                 "model_version": "XGB_V1",
@@ -141,6 +153,8 @@ def test_explanation_endpoint_reads_from_audit_trail(api_client, clean_database)
     assert body["decision"] == "NEEDS_REVIEW"
     assert "insufficient reliable data" in body["summary"]
     assert "Model factors:" in body["summary"]
+    assert "drift warning" in body["summary"]
     assert body["model_version"] == "XGB_V1"
     assert body["model_factor_contributions"][0]["feature_name"] == "Debt-To-Income Ratio"
     assert body["timeline"][0]["step"] == "CREDIT_BUREAU_FETCH"
+    assert any(entry["step"] == "DRIFT_DETECTED" for entry in body["timeline"])

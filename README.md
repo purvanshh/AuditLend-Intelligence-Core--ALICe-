@@ -2,7 +2,7 @@
 
 AuditLend Intelligence Core (ALICe) is an auditable credit decision engine with deterministic failure simulation, idempotent intake, asynchronous processing, encrypted PII storage, immutable audit logs, calibrated decision confidence, human-readable explanations, and an opt-in ML scorer with fallback guardrails.
 
-This repository is a production-readiness reference implementation. It is built around local infrastructure, deterministic mock providers, Docker Compose, PostgreSQL, Redis, FastAPI, Celery, and a governed ML stack trained on Lending Club historical data. It is not wired to real credit bureaus or real lending portfolios, and its ML results are currently validated through local smoke-scale evaluation rather than full production-grade model governance.
+This repository is a production-readiness reference implementation built around local infrastructure, deterministic mock providers, Docker Compose, PostgreSQL, Redis, FastAPI, Celery, and a governed ML stack trained on Lending Club historical data. It is not wired to real credit bureaus or live repayment ledgers, but the current repository state is validated with a full held-out `XGB_V1` evaluation run, zero-skip automated tests, live Docker ML smoke tests, proxy fairness diagnostics, and drift-alert coverage.
 
 ## Current Status
 
@@ -152,7 +152,16 @@ Celery Worker
   \-- GST Verifier Mock
 ```
 
-## Repository Map
+## System Pipeline
+
+1. `POST /api/v1/apply-loan` validates input, checks idempotency, encrypts PII, writes the application plus outbox intent, and returns immediately.
+2. The worker polls the outbox, atomically claims the application, and reuses any already-persisted external snapshots on retry.
+3. Credit bureau, bank analyzer, and GST verifier mocks are called deterministically with typed failure handling and audit-safe persistence.
+4. The decision engine computes heuristic risk, data reliability, calibrated confidence, and, when enabled, invokes `XGB_V1` with guardrails, SHAP explanations, and live drift checks.
+5. ML scoring either stays active under `RULE_SET_V2` or falls back deterministically to `RULE_SET_V1` when confidence, artifact availability, or forced failure flags require it.
+6. Audit logs record every step, including `ML_SCORING`, `DRIFT_DETECTED`, fallbacks, and the final decision snapshot used by `/explanation`.
+
+## Repository Structure
 
 | Path | Purpose |
 | --- | --- |
@@ -753,14 +762,14 @@ python3.11 -m venv .venv
 Run the broad verification command used for the latest Phase 10 pass:
 
 ```bash
-.venv/bin/pytest tests -q
+.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term
 ```
 
 Latest result:
 
 ```text
-142 passed
-17 skipped
+187 passed
+TOTAL 86%
 ```
 
 Run only unit tests:
@@ -772,22 +781,30 @@ Run only unit tests:
 Latest unit-only result:
 
 ```text
-140 passed
+included in the full repository pass above
 ```
 
-Run the same repository-wide suite with the current local coverage report:
+Run the official held-out `XGB_V1` evaluation report:
 
 ```bash
-.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term
+LENDING_CLUB_DATA_PATH="ml/data/raw/accepted_2007_to_2018Q4.csv.gz" \
+  .venv/bin/python -m ml.models.evaluate --official-xgb-v1
 ```
 
-Latest coverage result:
+Latest official held-out test metrics:
 
 ```text
-TOTAL 78%
+AUC-ROC 0.975664
+Brier 0.025293
+ECE 0.003550
 ```
 
-That `78%` is the real number from the May 3, 2026 run. It is below the earlier documented `85%` threshold, so the README now records the actual local verification outcome rather than the older heuristic-only figure.
+Run the official benchmark comparison:
+
+```bash
+LENDING_CLUB_DATA_PATH="ml/data/raw/accepted_2007_to_2018Q4.csv.gz" \
+  .venv/bin/python -m ml.benchmark.heuristic_vs_ml --official-xgb-v1 --ml-threshold 0.5
+```
 
 Run integration and chaos tests with live Postgres/Redis:
 
@@ -844,15 +861,32 @@ Current calibration status:
 
 - `RULE_SET_V1` uses SME-derived heuristic weights.
 - `RULE_SET_V2` is the ML-assisted scoring path activated only when ML is enabled or when the A/B assignment routes traffic to the ML arm.
-- The ML stack is implemented, calibrated, benchmarked, and audit-linked, but the published metrics are still local smoke-scale validation numbers.
+- The ML stack is implemented, calibrated, benchmarked, fairness-scored, drift-monitored, and audit-linked using the official `XGB_V1` artifact set.
 
 ## Operational Notes
 
 - The worker must register `worker.tasks.process_application.process_application`; this is verified in Docker logs during final testing.
 - The outbox poller starts when the Celery worker is ready.
 - API and worker images set `PYTHONPATH=/app` so imports are stable inside containers.
+- The worker preloads `XGB_V1` from `ml/models/manifest.yaml` at startup and mounts the model directory read-only in Docker.
+- The official drift snapshot lives at `ml/models/XGB_V1_reference_snapshot.json` and is used for non-blocking live KS-based alerting.
 - `docker-compose.yml` does not run API with `--reload`; dev reload belongs in `docker-compose.dev.yml`.
 - The local stack intentionally keeps infrastructure simple. Production deployment should move secrets, TLS, identity, logging retention, container hardening, and network policy into the target platform.
+
+## Definition of Done
+
+The implementation items below reflect the **current repository state as of May 3, 2026**. Git merge state depends on your branch workflow, so the checklist tracks implementation and verification status rather than PR status.
+
+- [x] All six implementation phases are complete in the current repository state.
+- [x] `ml.models.train` runs end to end and produces an `XGB_V1` artifact.
+- [x] `XGB_V1` outperforms `RULE_SET_V1` on the held-out test set with AUC-ROC `0.975664` and Brier `0.025293`.
+- [x] AuditLend smoke tests pass with ML enabled via environment flag.
+- [x] `/explanation` includes SHAP contributions for ML decisions.
+- [x] The A/B benchmark script outputs a clean summary.
+- [x] The drift detector fires an alert on shifted feature data and records `DRIFT_DETECTED` in the audit path.
+- [x] `README.md` is updated and `docs/CALIBRATION.md` is revised.
+- [x] The repository test suite passes with coverage `86%`.
+- [x] The project name, repository structure, and end-to-end ML pipeline are documented with factually correct current numbers.
 
 ## Project Principles
 

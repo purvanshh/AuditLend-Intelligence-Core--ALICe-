@@ -31,6 +31,7 @@ class DecisionOutput:
     ml_confidence: float | None = None
     model_summary: str | None = None
     model_factor_contributions: list[dict[str, Any]] = field(default_factory=list)
+    ml_drift_report: dict[str, Any] | None = None
     ab_test_arm: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -142,6 +143,7 @@ def compute_decision(
         ml_confidence=ml_result.model_confidence if ml_result else None,
         model_summary=ml_result.model_summary if ml_result else None,
         model_factor_contributions=ml_result.model_factor_contributions if ml_result else [],
+        ml_drift_report=ml_result.drift_report if ml_result else None,
         ab_test_arm=ab_test_assignment.arm if ab_test_assignment is not None else None,
     )
 
@@ -223,6 +225,7 @@ def _maybe_score_with_ml(
             score_breakdown=["ml_guardrail_fallback (applied) = MODEL_UNAVAILABLE"],
             model_factor_contributions=[],
             model_summary="ML model artifacts were unavailable, so the heuristic scorer was used instead.",
+            drift_report=None,
         )
     return ml_scorer.score(
         credit_result,

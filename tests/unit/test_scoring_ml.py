@@ -40,6 +40,14 @@ def test_ml_scorer_success_uses_calibrated_probability(monkeypatch, tmp_path: Pa
             contributions=[{"feature_name": "Credit Score", "shap_contribution": -0.2}],
         ),
     )
+    monkeypatch.setattr(
+        scoring,
+        "_detect_feature_drift",
+        lambda *args, **kwargs: {
+            "alert_count": 1,
+            "drifted_features": [{"feature_name": "loan_amount_to_income"}],
+        },
+    )
 
     scorer = scoring.MLScorer(tmp_path / "manifest.json", model_version="XGB_V1")
     result = scorer.score(
@@ -63,6 +71,9 @@ def test_ml_scorer_success_uses_calibrated_probability(monkeypatch, tmp_path: Pa
     assert result.model_confidence == 0.82
     assert result.model_version == "XGB_V1"
     assert result.model_factor_contributions == [{"feature_name": "Credit Score", "shap_contribution": -0.2}]
+    assert result.drift_report is not None
+    assert result.drift_report["alert_count"] == 1
+    assert "ml_drift_alert (warning) = loan_amount_to_income" in result.score_breakdown
 
 
 @pytest.mark.parametrize(

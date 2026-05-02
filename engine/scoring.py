@@ -4,15 +4,17 @@ import os
 from dataclasses import asdict, dataclass
 from datetime import date
 from functools import lru_cache
+import json
 from pathlib import Path
 from typing import Any
 
 from engine.rule_sets import ACTIVE_RULE_SET, RuleSet
 from ml.data.features import build_feature_row
 from ml.explain.shap_explainer import explain_feature_row
+from ml.governance.drift_detector import detect_feature_drift_from_snapshot
 from ml.governance.model_registry import ModelRegistry
 from ml.models.evaluate import find_latest_manifest, load_manifest
-from ml.models.train import OFFICIAL_MANIFEST_PATH
+from ml.models.train import MODEL_NUMERIC_FEATURES, OFFICIAL_MANIFEST_PATH, OFFICIAL_REFERENCE_SNAPSHOT_PATH
 from services import FailureType, ServiceResult
 
 
@@ -85,6 +87,7 @@ class MLScoringResult:
     score_breakdown: list[str]
     model_factor_contributions: list[dict[str, Any]]
     model_summary: str | None
+    drift_report: dict[str, Any] | None = None
 
     def to_audit_output(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -104,6 +107,9 @@ class MLScorer:
         )
         self.selected_candidate = str(
             self.manifest.get("selected_candidate") or self.manifest.get("model_version") or "xgboost"
+        )
+        self.reference_snapshot_path = Path(
+            str(self.manifest.get("reference_snapshot_path") or OFFICIAL_REFERENCE_SNAPSHOT_PATH)
         )
 
     def score(
@@ -135,6 +141,7 @@ class MLScorer:
                 score_breakdown=["ml_guardrail_fallback (applied) = TIMEOUT"],
                 model_factor_contributions=[],
                 model_summary="ML scoring timed out, so the heuristic scorer was used instead.",
+                drift_report=None,
             )
 
         if normalized_failure_mode in {"FORCE_CONFIDENCE_0.4", "FORCE_LOW_CONFIDENCE"}:
@@ -157,9 +164,11 @@ class MLScorer:
                 ],
                 model_factor_contributions=[],
                 model_summary="ML confidence was forced low for testing, so the heuristic scorer was used instead.",
+                drift_report=None,
             )
 
         feature_row = _build_ml_feature_row(credit_result, bank_result, gst_result, user_data)
+        drift_report = _detect_feature_drift(feature_row, self.reference_snapshot_path, self.model_version)
         explanation = explain_feature_row(feature_row, self.manifest_path, max_features=5)
         calibrated_probability = (
             explanation.calibrated_default_probability
@@ -185,6 +194,16 @@ class MLScorer:
         ]
         if fallback_reason is not None:
             score_breakdown.append(f"ml_guardrail_fallback (applied) = {fallback_reason}")
+        if drift_report is not None and int(drift_report.get("alert_count", 0)) > 0:
+            drifted_features = ", ".join(
+                str(row.get("feature_name"))
+                for row in drift_report.get("drifted_features", [])[:4]
+                if row.get("feature_name")
+            )
+            score_breakdown.append(
+                "ml_drift_alert (warning) = "
+                + (drifted_features or f"{drift_report.get('alert_count', 0)} feature(s)")
+            )
 
         return MLScoringResult(
             attempted=True,
@@ -201,6 +220,7 @@ class MLScorer:
             score_breakdown=score_breakdown,
             model_factor_contributions=[dict(row) for row in explanation.to_audit_payload()["model_factor_contributions"]],
             model_summary=explanation.model_summary,
+            drift_report=drift_report,
         )
 
 
@@ -408,3 +428,25 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if denominator <= 0:
         return 0.0
     return numerator / denominator
+
+
+def _detect_feature_drift(
+    feature_row: dict[str, Any],
+    reference_snapshot_path: Path,
+    model_version: str,
+) -> dict[str, Any] | None:
+    if not reference_snapshot_path.exists():
+        return None
+    try:
+        reference_snapshot = json.loads(reference_snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    candidate_rows = [feature_row] * 32
+    report = detect_feature_drift_from_snapshot(
+        reference_snapshot,
+        candidate_rows,
+        model_version=model_version,
+        feature_names=MODEL_NUMERIC_FEATURES,
+    )
+    return report.to_audit_payload()

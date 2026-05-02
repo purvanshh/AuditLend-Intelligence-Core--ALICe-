@@ -44,6 +44,17 @@ def test_build_explanation_from_degraded_audit_trail() -> None:
 def test_build_explanation_includes_ml_contributions_from_audit_trail() -> None:
     entries = [
         AuditLog(
+            step="DRIFT_DETECTED",
+            output_snapshot={
+                "status": "WARNING",
+                "drifted_features": [
+                    {"feature_name": "Loan Amount To Income"},
+                    {"feature_name": "Credit Score Midpoint"},
+                ],
+            },
+            created_at=datetime(2026, 4, 26, tzinfo=UTC),
+        ),
+        AuditLog(
             step="ML_SCORING",
             output_snapshot={
                 "model_version": "XGB_V1",
@@ -89,4 +100,6 @@ def test_build_explanation_includes_ml_contributions_from_audit_trail() -> None:
     assert explanation["model_version"] == "XGB_V1"
     assert len(explanation["model_factor_contributions"]) == 2
     assert "Model factors:" in explanation["summary"]
+    assert "drift warning" in explanation["summary"]
     assert explanation["model_factor_contributions"][0]["feature_name"] == "Debt-To-Income Ratio"
+    assert explanation["timeline"][0]["status"] == "WARNING"

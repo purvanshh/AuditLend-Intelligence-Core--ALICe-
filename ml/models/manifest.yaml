@@ -7,6 +7,7 @@
   "manifest_path": "ml/models/manifest.yaml",
   "model_artifact_path": "ml/models/XGB_V1_model.pkl",
   "model_version": "XGB_V1",
+  "reference_snapshot_path": "ml/models/XGB_V1_reference_snapshot.json",
   "search_results_path": "ml/models/XGB_V1_search_results.jsonl",
   "selected_params": {
     "colsample_bytree": 0.8,

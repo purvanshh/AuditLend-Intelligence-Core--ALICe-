@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from scipy.stats import ks_2samp
 
@@ -11,6 +11,7 @@ from ml.models.train import MODEL_NUMERIC_FEATURES
 from services.metrics import drift_alerts_total
 
 DEFAULT_DRIFT_P_VALUE_THRESHOLD = 0.01
+SINGLE_SAMPLE_EXPANSION = 32
 
 
 @dataclass(frozen=True)
@@ -48,8 +49,8 @@ class DriftDetectionReport:
 
 
 def detect_feature_drift(
-    reference_feature_rows: Sequence[dict[str, Any]],
-    candidate_feature_rows: Sequence[dict[str, Any]],
+    reference_feature_rows: Sequence[dict[str, Any]] | Mapping[str, Any],
+    candidate_feature_rows: Sequence[dict[str, Any]] | Mapping[str, Any],
     *,
     feature_names: Sequence[str] | None = None,
     model_version: str | None = None,
@@ -58,16 +59,19 @@ def detect_feature_drift(
 ) -> DriftDetectionReport:
     """Run KS drift checks across a numeric feature set."""
 
+    normalized_reference_rows = _normalize_feature_rows(reference_feature_rows)
+    normalized_candidate_rows = _normalize_feature_rows(candidate_feature_rows)
     selected_features = tuple(feature_names or MODEL_NUMERIC_FEATURES)
     checked_features: list[FeatureDriftResult] = []
 
     for feature_name in selected_features:
-        reference_values = _feature_values(reference_feature_rows, feature_name)
-        candidate_values = _feature_values(candidate_feature_rows, feature_name)
+        reference_values = _feature_values(normalized_reference_rows, feature_name)
+        candidate_values = _feature_values(normalized_candidate_rows, feature_name)
         if not reference_values or not candidate_values:
             continue
 
-        statistic, p_value = ks_2samp(reference_values, candidate_values, alternative="two-sided", method="auto")
+        candidate_values_for_test = _expand_single_sample(candidate_values)
+        statistic, p_value = ks_2samp(reference_values, candidate_values_for_test, alternative="two-sided", method="auto")
         result = FeatureDriftResult(
             feature_name=str(feature_name),
             reference_count=len(reference_values),
@@ -114,22 +118,27 @@ def build_reference_feature_snapshot(
 
 def detect_feature_drift_from_snapshot(
     reference_snapshot: dict[str, Sequence[float]],
-    candidate_feature_rows: Sequence[dict[str, Any]],
+    candidate_feature_rows: Sequence[dict[str, Any]] | Mapping[str, Any],
     *,
+    feature_names: Sequence[str] | None = None,
     model_version: str | None = None,
     p_value_threshold: float = DEFAULT_DRIFT_P_VALUE_THRESHOLD,
     increment_metrics: bool = True,
 ) -> DriftDetectionReport:
     """Run drift checks using a precomputed reference distribution snapshot."""
 
+    normalized_candidate_rows = _normalize_feature_rows(candidate_feature_rows)
     checked_features: list[FeatureDriftResult] = []
-    for feature_name, reference_values in reference_snapshot.items():
-        candidate_values = _feature_values(candidate_feature_rows, feature_name)
+    selected_feature_names = tuple(feature_names or reference_snapshot.keys())
+    for feature_name in selected_feature_names:
+        reference_values = reference_snapshot.get(str(feature_name), ())
+        candidate_values = _feature_values(normalized_candidate_rows, str(feature_name))
         cleaned_reference = [float(value) for value in reference_values]
         if not cleaned_reference or not candidate_values:
             continue
 
-        statistic, p_value = ks_2samp(cleaned_reference, candidate_values, alternative="two-sided", method="auto")
+        candidate_values_for_test = _expand_single_sample(candidate_values)
+        statistic, p_value = ks_2samp(cleaned_reference, candidate_values_for_test, alternative="two-sided", method="auto")
         result = FeatureDriftResult(
             feature_name=str(feature_name),
             reference_count=len(cleaned_reference),
@@ -167,3 +176,17 @@ def _feature_values(feature_rows: Sequence[dict[str, Any]], feature_name: str) -
             continue
         values.append(float(value))
     return values
+
+
+def _normalize_feature_rows(
+    feature_rows: Sequence[dict[str, Any]] | Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    if isinstance(feature_rows, Mapping):
+        return [dict(feature_rows)]
+    return [dict(row) for row in feature_rows]
+
+
+def _expand_single_sample(values: Sequence[float]) -> list[float]:
+    if len(values) != 1:
+        return [float(value) for value in values]
+    return [float(values[0])] * SINGLE_SAMPLE_EXPANSION
