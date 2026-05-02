@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from datetime import date
 
-from ml.data.features import build_feature_row, compute_correlation_matrix
+from pathlib import Path
+
+from ml.data.features import (
+    _band_label,
+    _compute_credit_history_age_years,
+    _pearson,
+    build_feature_row,
+    compute_correlation_matrix,
+    render_correlation_heatmap,
+    sample_feature_rows,
+    write_feature_correlation_report,
+)
 
 
 def test_build_feature_row_generates_expected_ratios():
@@ -76,3 +87,32 @@ def test_compute_correlation_matrix_returns_identity_on_diagonal():
     assert matrix["loan_amount"]["loan_amount"] == 1.0
     assert matrix["monthly_income"]["monthly_income"] == 1.0
     assert round(matrix["loan_amount"]["monthly_income"], 6) == 1.0
+
+
+def test_feature_reporting_helpers_cover_sampling_and_rendering(tmp_path: Path) -> None:
+    feature_rows = [
+        {"loan_id": "97", "loan_amount": 1.0, "monthly_income": 2.0},
+        {"loan_id": "194", "loan_amount": 2.0, "monthly_income": 4.0},
+        {"loan_id": "x", "loan_amount": 3.0, "monthly_income": 6.0},
+    ]
+
+    sampled = sample_feature_rows(feature_rows, modulo=97, limit=5)
+    matrix = compute_correlation_matrix(sampled, ("loan_amount", "monthly_income"))
+    rendered = render_correlation_heatmap(matrix, feature_names=("loan_amount", "monthly_income"))
+    report_path = write_feature_correlation_report(
+        tmp_path / "correlation.md",
+        feature_rows=sampled,
+        feature_names=("loan_amount", "monthly_income"),
+    )
+
+    assert [row["loan_id"] for row in sampled] == ["97", "194"]
+    assert "| feature | loan_amount | monthly_income |" in rendered
+    assert report_path.exists()
+    assert "Phase 2 Feature Correlation Heatmap" in report_path.read_text(encoding="utf-8")
+
+
+def test_feature_math_helpers_cover_edge_cases() -> None:
+    assert _band_label(0.75) == "++"
+    assert _band_label(-0.5) == "-"
+    assert _compute_credit_history_age_years({"issue_date": None, "earliest_credit_line": None}) == 0.0
+    assert _pearson([], []) == 0.0
