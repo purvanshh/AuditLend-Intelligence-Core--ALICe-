@@ -25,3 +25,27 @@ Default model families:
 - LightGBM classifier
 
 Model selection uses validation AUC-PR by default.
+
+## Phase 4 Evaluation
+
+Evaluate the latest manifest with:
+
+```bash
+python -m ml.models.evaluate
+```
+
+Or evaluate a specific run with the same capped sampling used during training:
+
+```bash
+python -m ml.models.evaluate \
+  --manifest-path ml/models/experiments/<run_id>/manifest.json \
+  --max-rows-per-split 50000 \
+  --modulo-sampling 8
+```
+
+Evaluation outputs:
+
+- `ml/models/reports/<run_id>_evaluation.md`
+- split metrics with AUC-ROC, AUC-PR, Brier score, and ECE
+- threshold tables for confusion-matrix analysis
+- model-family comparison from the Phase 3 search log

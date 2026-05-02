@@ -9,6 +9,12 @@
 - **Known limitation:** This is a governed scorecard, not a statistically calibrated probability-of-default model.
 - **Next steps:** Backtest against historical loan performance data; tune using KS, Gini/AUC, calibration curves, and adverse-action review.
 
+## ML Evaluation Scaffold (2026-05-03)
+
+- The repository now includes a held-out evaluation workflow in `ml/models/evaluate.py`.
+- Evaluation reports include AUC-ROC, AUC-PR, Brier score, expected calibration error, threshold tables, and candidate-family comparison.
+- This is still pre-calibration infrastructure: isotonic/Platt calibration is the next phase before any model should be treated as empirically calibrated probability-of-default.
+
 ## Adding A New Rule Set
 
 1. Create a new immutable `RuleSet` instance in `engine/rule_sets.py` with a unique version.
