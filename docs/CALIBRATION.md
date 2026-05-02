@@ -78,6 +78,12 @@ Largest observed proxy disparities from the May 3, 2026 held-out run:
 
 The full table for each included proxy group is written to `ml/models/reports/XGB_V1_evaluation.md`.
 
+## Live Drift Monitoring
+
+- The official `XGB_V1` runtime now uses the sampled reference snapshot at `ml/models/XGB_V1_reference_snapshot.json` for non-blocking KS-based drift checks during ML scoring.
+- When shifted live inputs trigger one or more feature alerts at `p < 0.01`, the worker increments `auditlend_drift_alerts_total`, appends a `DRIFT_DETECTED` warning to the audit trail, and preserves the final decision path.
+- This alerting path is advisory only: it does not block scoring or override the fallback guardrails by itself.
+
 ## Adding A New Rule Set
 
 1. Create a new immutable `RuleSet` instance in `engine/rule_sets.py` with a unique version.

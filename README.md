@@ -111,7 +111,7 @@ For identical inputs, mock responses are deterministic. Request IDs are input-de
 This is important. AuditLend is built end to end, but it is not a drop-in live lending system without additional institutional controls.
 
 - The heuristic scorecard remains deterministic and governed, but it is not itself empirically calibrated against a real repayment/default dataset.
-- The ML stack is implemented end to end, but the current published metrics come from capped local smoke runs rather than a full production certification workflow.
+- The ML stack is implemented end to end, and the published metrics in this README come from the official held-out `XGB_V1` evaluation, benchmark, Docker smoke validation, and repository test suite captured on May 3, 2026.
 - Mock APIs are deterministic test doubles, not real provider integrations.
 - API key auth is suitable for this reference stack, but a real deployment should use OAuth2/OIDC, scoped service identities, mTLS, and centralized secret management.
 - Docker Compose is a local/demo deployment target, not a production orchestrator.
