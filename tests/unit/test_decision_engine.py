@@ -268,3 +268,38 @@ def test_low_confidence_ml_result_falls_back_to_heuristic() -> None:
     assert output.ml_fallback_used is True
     assert output.ml_fallback_reason == "model_confidence_below_threshold<0.60"
     assert "ml_guardrail_fallback (applied) = model_confidence_below_threshold<0.60" in output.factors
+
+
+def test_env_wrapper_respects_ab_test_assignment(monkeypatch) -> None:
+    ml_result = MLScoringResult(
+        attempted=True,
+        used=True,
+        fallback_used=False,
+        fallback_reason=None,
+        error_type=None,
+        risk_score=80.0,
+        predicted_default_probability=0.2,
+        calibrated_default_probability=0.2,
+        model_confidence=0.8,
+        model_version="XGB_V1",
+        selected_candidate="lightgbm",
+        score_breakdown=["risk_score (ml_mapped) = 80.00"],
+        model_factor_contributions=[],
+        model_summary="Model factors: Credit Score (800) reduced predicted default risk.",
+    )
+
+    monkeypatch.setenv("AB_TEST_ENABLED", "true")
+    monkeypatch.setenv("AB_TEST_ML_RATIO", "1.0")
+    monkeypatch.setattr("engine.decision.get_ml_scorer_from_env", lambda: FakeMLScorer(ml_result))
+
+    output = compute_decision_from_env(
+        result({"credit_score": 800}),
+        result({"income_stability": 0.9}),
+        result({"gst_compliant": True}),
+        USER_DATA,
+        application_id="ab-test-app-1",
+    )
+
+    assert output.ab_test_arm == "ml"
+    assert output.scoring_strategy == "ml"
+    assert output.rule_version == "RULE_SET_V2"

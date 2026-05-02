@@ -11,6 +11,7 @@ class DecisionResponse(BaseModel):
     rule_version: str | None = None
     model_version: str | None = None
     scoring_strategy: str | None = None
+    ab_test_arm: str | None = None
 
 
 class DecisionPendingResponse(BaseModel):

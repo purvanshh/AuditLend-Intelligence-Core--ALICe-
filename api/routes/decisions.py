@@ -42,6 +42,7 @@ async def get_decision(
         rule_version=decision_output.get("rule_version"),
         model_version=decision_output.get("model_version"),
         scoring_strategy=decision_output.get("scoring_strategy"),
+        ab_test_arm=decision_output.get("ab_test_arm"),
     )
 
 

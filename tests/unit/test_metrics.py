@@ -6,7 +6,7 @@ from prometheus_client import generate_latest
 from api.main import app
 from services import FailureType
 from services.credit_bureau import CreditBureauService
-from services.metrics import drift_alerts_total, task_duration, task_failures
+from services.metrics import ab_assignments_total, ab_decision_confidence, ab_decisions_total, drift_alerts_total, task_duration, task_failures
 
 
 def test_metrics_endpoint_exposes_auditlend_metrics() -> None:
@@ -40,8 +40,13 @@ def test_task_metrics_are_exported() -> None:
     task_duration.labels(task_name="process_application").observe(0.1)
     task_failures.labels(task_name="process_application", error_type="SYSTEM_ERROR").inc()
     drift_alerts_total.labels(feature="loan_amount", model_version="XGB_V1").inc()
+    ab_assignments_total.labels(arm="ml").inc()
+    ab_decisions_total.labels(arm="ml", decision="APPROVE", scoring_strategy="ml").inc()
+    ab_decision_confidence.labels(arm="ml").observe(0.82)
 
     metrics = generate_latest().decode("utf-8")
     assert "auditlend_task_duration_seconds" in metrics
     assert 'auditlend_task_failures_total{error_type="SYSTEM_ERROR",task_name="process_application"}' in metrics
     assert 'auditlend_drift_alerts_total{feature="loan_amount",model_version="XGB_V1"}' in metrics
+    assert 'auditlend_ab_assignments_total{arm="ml"}' in metrics
+    assert 'auditlend_ab_decisions_total{arm="ml",decision="APPROVE",scoring_strategy="ml"}' in metrics

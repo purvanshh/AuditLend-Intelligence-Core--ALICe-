@@ -2,6 +2,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from ml.governance.ab_test import ExperimentAssignment, assignment_from_env
 from engine.confidence import compute_data_reliability, compute_decision_confidence
 from engine.rule_sets import ACTIVE_RULE_SET, RULE_SET_V2, RuleSet
 from engine.rules import Decision, evaluate
@@ -30,6 +31,7 @@ class DecisionOutput:
     ml_confidence: float | None = None
     model_summary: str | None = None
     model_factor_contributions: list[dict[str, Any]] = field(default_factory=list)
+    ab_test_arm: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -48,6 +50,7 @@ def compute_decision(
     ml_scorer: MLScorer | None = None,
     ml_requested: bool = False,
     ml_failure_mode: str | None = None,
+    ab_test_assignment: ExperimentAssignment | None = None,
 ) -> DecisionOutput:
     """
     Orchestrates extraction, risk scoring, calibrated confidence, and manual review override.
@@ -139,6 +142,7 @@ def compute_decision(
         ml_confidence=ml_result.model_confidence if ml_result else None,
         model_summary=ml_result.model_summary if ml_result else None,
         model_factor_contributions=ml_result.model_factor_contributions if ml_result else [],
+        ab_test_arm=ab_test_assignment.arm if ab_test_assignment is not None else None,
     )
 
 
@@ -148,8 +152,10 @@ def compute_decision_from_env(
     gst_result: ServiceResult,
     user_data: dict[str, Any],
     failure_flags: dict[str, Any] | None = None,
+    application_id: str | None = None,
 ) -> DecisionOutput:
-    ml_requested = ml_scoring_requested_from_env()
+    assignment = assignment_from_env(application_id) if application_id is not None else None
+    ml_requested = _ml_requested_from_env_and_assignment(assignment)
     return compute_decision(
         credit_result,
         bank_result,
@@ -160,6 +166,7 @@ def compute_decision_from_env(
         ml_scorer=get_ml_scorer_from_env() if ml_requested else None,
         ml_requested=ml_requested,
         ml_failure_mode=(failure_flags or {}).get("ml_model"),
+        ab_test_assignment=assignment,
     )
 
 
@@ -225,3 +232,10 @@ def _maybe_score_with_ml(
         confidence_threshold=confidence_threshold,
         failure_mode=ml_failure_mode,
     )
+
+
+def _ml_requested_from_env_and_assignment(assignment: ExperimentAssignment | None) -> bool:
+    explicit_request = ml_scoring_requested_from_env()
+    if assignment is not None:
+        return assignment.arm == "ml"
+    return explicit_request

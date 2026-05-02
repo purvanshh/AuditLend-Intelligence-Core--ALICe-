@@ -22,7 +22,15 @@ from services.bank_analyzer import BankAnalyzerService
 from services.credit_bureau import CreditBureauService
 from services.crypto import pii_service_from_env
 from services.gst_verifier import GstVerifierService
-from services.metrics import decision_confidence, loan_applications_total, task_duration, task_failures
+from services.metrics import (
+    ab_assignments_total,
+    ab_decision_confidence,
+    ab_decisions_total,
+    decision_confidence,
+    loan_applications_total,
+    task_duration,
+    task_failures,
+)
 from worker.celery_app import celery_app
 
 
@@ -101,6 +109,7 @@ async def _process_application(application_id: str) -> dict[str, Any]:
         gst_result,
         decision_user_data,
         failure_flags=failure_flags,
+        application_id=str(app_id),
     )
 
     _store_processing_results(
@@ -123,6 +132,7 @@ async def _process_application(application_id: str) -> dict[str, Any]:
         "rule_version": decision_output.rule_version,
         "model_version": decision_output.model_version,
         "scoring_strategy": decision_output.scoring_strategy,
+        "ab_test_arm": decision_output.ab_test_arm,
     }
 
 
@@ -323,6 +333,14 @@ def _store_processing_results(
         application.confidence = Decimal(str(decision_output.confidence))
         loan_applications_total.labels(status=status).inc()
         decision_confidence.observe(decision_output.confidence)
+        if decision_output.ab_test_arm is not None:
+            ab_assignments_total.labels(arm=decision_output.ab_test_arm).inc()
+            ab_decisions_total.labels(
+                arm=decision_output.ab_test_arm,
+                decision=decision_output.decision.value,
+                scoring_strategy=decision_output.scoring_strategy,
+            ).inc()
+            ab_decision_confidence.labels(arm=decision_output.ab_test_arm).observe(decision_output.confidence)
 
         if decision_output.ml_requested:
             write_audit_entry(
@@ -339,6 +357,7 @@ def _store_processing_results(
                     "model_version": decision_output.model_version,
                     "selected_candidate": decision_output.selected_candidate,
                     "scoring_strategy": decision_output.scoring_strategy,
+                    "ab_test_arm": decision_output.ab_test_arm,
                     "predicted_default_probability": decision_output.ml_default_probability,
                     "ml_confidence": decision_output.ml_confidence,
                     "fallback_used": decision_output.ml_fallback_used,

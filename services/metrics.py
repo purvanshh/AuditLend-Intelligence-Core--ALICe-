@@ -49,6 +49,25 @@ drift_alerts_total = Counter(
     ["feature", "model_version"],
 )
 
+ab_assignments_total = Counter(
+    "auditlend_ab_assignments_total",
+    "A/B experiment assignments by arm",
+    ["arm"],
+)
+
+ab_decisions_total = Counter(
+    "auditlend_ab_decisions_total",
+    "A/B experiment decision outcomes by arm and scoring strategy",
+    ["arm", "decision", "scoring_strategy"],
+)
+
+ab_decision_confidence = Histogram(
+    "auditlend_ab_decision_confidence",
+    "Decision confidence scores grouped by A/B arm",
+    ["arm"],
+    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+)
+
 
 def circuit_state_value(state: str) -> int:
     return {
