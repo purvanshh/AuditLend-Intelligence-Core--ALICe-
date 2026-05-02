@@ -43,6 +43,12 @@ task_failures = Counter(
     ["task_name", "error_type"],
 )
 
+drift_alerts_total = Counter(
+    "auditlend_drift_alerts_total",
+    "Feature drift alerts raised by the ML governance layer",
+    ["feature", "model_version"],
+)
+
 
 def circuit_state_value(state: str) -> int:
     return {
