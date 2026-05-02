@@ -87,9 +87,17 @@ def test_audit_redaction_strips_raw_pan() -> None:
 
 def test_decision_user_data_replaces_pan_with_hash() -> None:
     safe = _decision_user_data(
-        {"pan": "ABCDE1234F", "monthly_income": 120000, "existing_emis": 25000},
+        {
+            "pan": "ABCDE1234F",
+            "monthly_income": 120000,
+            "existing_emis": 25000,
+            "loan_amount": 500000,
+            "tenure_months": 36,
+        },
         "abc123",
     )
 
     assert "pan" not in safe
     assert safe["pan_hash"] == "abc123"
+    assert safe["loan_amount"] == 500000
+    assert safe["tenure_months"] == 36

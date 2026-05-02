@@ -23,10 +23,17 @@ class GSTVerifierFailureMode(StrEnum):
     NO_RECORD = "NO_RECORD"
 
 
+class MLModelFailureMode(StrEnum):
+    SUCCESS = "SUCCESS"
+    TIMEOUT = "TIMEOUT"
+    FORCE_CONFIDENCE_0_4 = "FORCE_CONFIDENCE_0.4"
+
+
 class FailureFlags(BaseModel):
     credit_bureau: CreditBureauFailureMode | None = None
     bank_analyzer: BankAnalyzerFailureMode | None = None
     gst_verifier: GSTVerifierFailureMode | None = None
+    ml_model: MLModelFailureMode | None = None
 
 
 class UserData(BaseModel):

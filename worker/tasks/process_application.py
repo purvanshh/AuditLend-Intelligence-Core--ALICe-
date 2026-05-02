@@ -100,6 +100,7 @@ async def _process_application(application_id: str) -> dict[str, Any]:
         bank_result,
         gst_result,
         decision_user_data,
+        failure_flags=failure_flags,
     )
 
     _store_processing_results(
@@ -120,6 +121,8 @@ async def _process_application(application_id: str) -> dict[str, Any]:
         "data_reliability": decision_output.data_reliability,
         "risk_score": decision_output.risk_score,
         "rule_version": decision_output.rule_version,
+        "model_version": decision_output.model_version,
+        "scoring_strategy": decision_output.scoring_strategy,
     }
 
 
@@ -321,6 +324,36 @@ def _store_processing_results(
         loan_applications_total.labels(status=status).inc()
         decision_confidence.observe(decision_output.confidence)
 
+        if decision_output.ml_requested:
+            write_audit_entry(
+                application_id=application_id,
+                step="ML_SCORING",
+                input_snapshot={
+                    "features": audit_safe_features(
+                        audit_user_data,
+                        _risk_score_audit_breakdown(audit_user_data, decision_output, credit_result, bank_result, gst_result),
+                    ),
+                    "ml_failure_flag": failure_flags.get("ml_model", "SUCCESS"),
+                },
+                output_snapshot={
+                    "model_version": decision_output.model_version,
+                    "selected_candidate": decision_output.selected_candidate,
+                    "scoring_strategy": decision_output.scoring_strategy,
+                    "predicted_default_probability": decision_output.ml_default_probability,
+                    "ml_confidence": decision_output.ml_confidence,
+                    "fallback_used": decision_output.ml_fallback_used,
+                    "fallback_reason": decision_output.ml_fallback_reason,
+                    "error_type": decision_output.ml_error_type,
+                    "model_summary": decision_output.model_summary,
+                    "model_factor_contributions": decision_output.model_factor_contributions,
+                },
+                error_type=decision_output.ml_error_type,
+                fallback_used=decision_output.ml_fallback_used,
+                fallback_reason=decision_output.ml_fallback_reason,
+                rule_version="RULE_SET_V2",
+                session=session,
+            )
+
         write_audit_entry(
             application_id=application_id,
             step="DECISION_CALCULATION",
@@ -481,6 +514,8 @@ def _decision_user_data(user_data: dict[str, Any], pan_hash: str | None) -> dict
     safe_user_data = {
         "monthly_income": user_data["monthly_income"],
         "existing_emis": user_data.get("existing_emis", 0),
+        "loan_amount": user_data.get("loan_amount"),
+        "tenure_months": user_data.get("tenure_months"),
     }
     if pan_hash is not None:
         safe_user_data["pan_hash"] = pan_hash
@@ -512,6 +547,8 @@ def _risk_score_audit_breakdown(
             "risk_score": decision_output.risk_score,
             "confidence": decision_output.confidence,
             "data_reliability": decision_output.data_reliability,
+            "scoring_strategy": decision_output.scoring_strategy,
+            "model_version": decision_output.model_version,
         },
         "failure_types": failure_types,
     }

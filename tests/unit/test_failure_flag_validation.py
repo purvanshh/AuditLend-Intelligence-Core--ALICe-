@@ -69,6 +69,7 @@ def test_apply_request_model_accepts_valid_per_service_failure_modes() -> None:
                 "credit_bureau": "TIMEOUT",
                 "bank_analyzer": "PARTIAL_DATA",
                 "gst_verifier": "PAN_MISMATCH",
+                "ml_model": "FORCE_CONFIDENCE_0.4",
             },
         }
     )
@@ -77,6 +78,7 @@ def test_apply_request_model_accepts_valid_per_service_failure_modes() -> None:
     assert request.failure_flags.credit_bureau == "TIMEOUT"
     assert request.failure_flags.bank_analyzer == "PARTIAL_DATA"
     assert request.failure_flags.gst_verifier == "PAN_MISMATCH"
+    assert request.failure_flags.ml_model == "FORCE_CONFIDENCE_0.4"
 
 
 def test_apply_request_model_rejects_invalid_cross_service_failure_modes() -> None:
@@ -88,6 +90,7 @@ def test_apply_request_model_rejects_invalid_cross_service_failure_modes() -> No
                     "credit_bureau": "NO_RECORD",
                     "bank_analyzer": "SERVICE_DOWN",
                     "gst_verifier": "FORMAT_ERROR",
+                    "ml_model": "PAN_MISMATCH",
                 },
             }
         )

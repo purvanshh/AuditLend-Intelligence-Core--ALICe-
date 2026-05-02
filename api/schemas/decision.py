@@ -9,6 +9,8 @@ class DecisionResponse(BaseModel):
     risk_score: float | None = None
     factors: list[str] = Field(default_factory=list)
     rule_version: str | None = None
+    model_version: str | None = None
+    scoring_strategy: str | None = None
 
 
 class DecisionPendingResponse(BaseModel):

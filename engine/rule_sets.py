@@ -60,6 +60,23 @@ RULE_SET_V1 = RuleSet(
     decline_dti_threshold=0.6,
 )
 
+RULE_SET_V2 = RuleSet(
+    version="RULE_SET_V2",
+    description="ML-assisted scorecard using calibrated probability mapping with heuristic fallback guardrails.",
+    created_at="2026-05-03",
+    credit_weight=40.0,
+    stability_weight=20.0,
+    dti_weight=25.0,
+    gst_weight=15.0,
+    data_quality_penalty=5.0,
+    max_data_quality_penalty=15.0,
+    approve_high_threshold=70.0,
+    approve_moderate_threshold=55.0,
+    decline_threshold=35.0,
+    moderate_max_dti=0.5,
+    decline_dti_threshold=0.6,
+)
+
 ACTIVE_RULE_SET = RULE_SET_V1
 
-ALL_RULE_SETS = {rule_set.version: rule_set for rule_set in [RULE_SET_V1]}
+ALL_RULE_SETS = {rule_set.version: rule_set for rule_set in [RULE_SET_V1, RULE_SET_V2]}

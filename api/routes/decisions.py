@@ -40,6 +40,8 @@ async def get_decision(
         risk_score=decision_output.get("risk_score"),
         factors=decision_output.get("factors", []),
         rule_version=decision_output.get("rule_version"),
+        model_version=decision_output.get("model_version"),
+        scoring_strategy=decision_output.get("scoring_strategy"),
     )
 
 

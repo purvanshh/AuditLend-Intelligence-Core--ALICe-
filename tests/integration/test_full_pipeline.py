@@ -4,7 +4,9 @@ import uuid
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+import engine.decision as decision_module
 from models.application import LoanApplication
+from engine.scoring import MLScoringResult
 from services import FailureType, ServiceResult
 from tests.conftest import encrypted_application_fields
 from worker.tasks import process_application as task_module
@@ -111,3 +113,79 @@ def test_full_worker_pipeline_all_failures_routes_manual_review(monkeypatch, cle
     assert result["status"] == "MANUAL_REVIEW"
     assert result["decision"] == "NEEDS_REVIEW"
     assert result["confidence"] < 0.6
+
+
+def test_full_worker_pipeline_ml_path_writes_audit_entry(monkeypatch, clean_database, sample_user_data) -> None:
+    application_id = _insert_application(clean_database, sample_user_data)
+
+    async def fake_credit_fetch(*args, **kwargs):
+        return ServiceResult(success=True, data={"credit_score": 790}, raw_response={"credit_score": 790})
+
+    async def fake_bank_analyze(*args, **kwargs):
+        return ServiceResult(
+            success=True,
+            data={"income_stability": 0.92, "monthly_inflow": 120000, "monthly_outflow": 45000},
+            raw_response={"income_stability": 0.92, "monthly_inflow": 120000, "monthly_outflow": 45000},
+        )
+
+    async def fake_gst_verify(*args, **kwargs):
+        return ServiceResult(success=True, data={"gst_compliant": True}, raw_response={"gst_compliant": True})
+
+    class FakeMLScorer:
+        def score(self, *args, **kwargs):
+            return MLScoringResult(
+                attempted=True,
+                used=True,
+                fallback_used=False,
+                fallback_reason=None,
+                error_type=None,
+                risk_score=81.6,
+                predicted_default_probability=0.22,
+                calibrated_default_probability=0.184,
+                model_confidence=0.816,
+                model_version="XGB_V1",
+                selected_candidate="lightgbm",
+                score_breakdown=[
+                    "ml_default_probability (raw) = 0.2200",
+                    "ml_default_probability (calibrated) = 0.1840",
+                    "risk_score (ml_mapped) = 81.60",
+                ],
+                model_factor_contributions=[
+                    {
+                        "feature_name": "Credit Score",
+                        "raw_value": "790",
+                        "shap_contribution": -0.19,
+                        "direction": "decrease_default_risk",
+                    }
+                ],
+                model_summary="Model factors: Credit Score (790) reduced predicted default risk.",
+            )
+
+    monkeypatch.setenv("ML_ENABLED", "true")
+    monkeypatch.setattr(task_module.redis_async, "from_url", lambda *args, **kwargs: FakeRedis())
+    monkeypatch.setattr(task_module.CreditBureauService, "fetch", fake_credit_fetch)
+    monkeypatch.setattr(task_module.BankAnalyzerService, "analyze", fake_bank_analyze)
+    monkeypatch.setattr(task_module.GstVerifierService, "verify", fake_gst_verify)
+    monkeypatch.setattr(decision_module, "get_ml_scorer_from_env", lambda: FakeMLScorer())
+
+    result = asyncio.run(task_module._process_application(application_id))
+
+    assert result["status"] == "COMPLETED"
+    assert result["decision"] == "APPROVE"
+    assert result["rule_version"] == "RULE_SET_V2"
+    assert result["model_version"] == "XGB_V1"
+    assert result["scoring_strategy"] == "ml"
+
+    with clean_database.connect() as connection:
+        steps = connection.execute(
+            text("SELECT step FROM audit_logs WHERE application_id = :id ORDER BY id"),
+            {"id": application_id},
+        ).scalars().all()
+        ml_snapshot = connection.execute(
+            text("SELECT output_snapshot FROM audit_logs WHERE application_id = :id AND step = 'ML_SCORING'"),
+            {"id": application_id},
+        ).scalar_one()
+
+    assert "ML_SCORING" in steps
+    assert ml_snapshot["model_version"] == "XGB_V1"
+    assert ml_snapshot["fallback_used"] is False

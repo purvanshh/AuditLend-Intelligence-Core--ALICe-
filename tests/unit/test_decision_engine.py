@@ -1,4 +1,5 @@
 from engine.rules import Decision
+from engine.scoring import MLScoringResult
 from engine.decision import compute_decision, compute_decision_from_env
 from services import FailureType, ServiceResult
 
@@ -172,3 +173,98 @@ def test_gst_no_record_defaults_to_non_compliant() -> None:
     assert output.decision == Decision.NEEDS_REVIEW
     assert "gst_component (non_compliant) = 0.00/15.00" in output.factors
     assert "gst_gate (applied) = risk_score capped at 54.00" in output.factors
+
+
+class FakeMLScorer:
+    def __init__(self, result: MLScoringResult):
+        self.result = result
+
+    def score(self, *args, **kwargs) -> MLScoringResult:
+        return self.result
+
+
+def test_confident_ml_score_uses_rule_set_v2() -> None:
+    ml_result = MLScoringResult(
+        attempted=True,
+        used=True,
+        fallback_used=False,
+        fallback_reason=None,
+        error_type=None,
+        risk_score=82.4,
+        predicted_default_probability=0.19,
+        calibrated_default_probability=0.176,
+        model_confidence=0.824,
+        model_version="XGB_V1",
+        selected_candidate="lightgbm",
+        score_breakdown=[
+            "ml_default_probability (raw) = 0.1900",
+            "ml_default_probability (calibrated) = 0.1760",
+            "risk_score (ml_mapped) = 82.40",
+        ],
+        model_factor_contributions=[
+            {
+                "feature_name": "Debt-To-Income Ratio",
+                "raw_value": "20.8%",
+                "shap_contribution": -0.11,
+                "direction": "decrease_default_risk",
+            }
+        ],
+        model_summary="Model factors: Debt-To-Income Ratio (20.8%) reduced predicted default risk.",
+    )
+
+    output = compute_decision(
+        result({"credit_score": 800}),
+        result({"income_stability": 0.9}),
+        result({"gst_compliant": True}),
+        USER_DATA,
+        ml_scorer=FakeMLScorer(ml_result),
+        ml_requested=True,
+    )
+
+    assert output.decision == Decision.APPROVE
+    assert output.rule_version == "RULE_SET_V2"
+    assert output.scoring_strategy == "ml"
+    assert output.risk_score == 82.4
+    assert output.model_version == "XGB_V1"
+    assert output.model_factor_contributions[0]["feature_name"] == "Debt-To-Income Ratio"
+    assert output.factors[0] == "heuristic_risk_score (shadow) = 88.35"
+
+
+def test_low_confidence_ml_result_falls_back_to_heuristic() -> None:
+    ml_result = MLScoringResult(
+        attempted=True,
+        used=False,
+        fallback_used=True,
+        fallback_reason="model_confidence_below_threshold<0.60",
+        error_type=None,
+        risk_score=None,
+        predicted_default_probability=0.49,
+        calibrated_default_probability=0.48,
+        model_confidence=0.52,
+        model_version="XGB_V1",
+        selected_candidate="lightgbm",
+        score_breakdown=[
+            "ml_default_probability (raw) = 0.4900",
+            "ml_default_probability (calibrated) = 0.4800",
+            "ml_guardrail_fallback (applied) = model_confidence_below_threshold<0.60",
+        ],
+        model_factor_contributions=[],
+        model_summary="ML confidence was too low, so the heuristic scorer was used instead.",
+    )
+
+    output = compute_decision(
+        result({"credit_score": 800}),
+        result({"income_stability": 0.9}),
+        result({"gst_compliant": True}),
+        USER_DATA,
+        ml_scorer=FakeMLScorer(ml_result),
+        ml_requested=True,
+    )
+
+    assert output.decision == Decision.APPROVE
+    assert output.rule_version == "RULE_SET_V1"
+    assert output.scoring_strategy == "heuristic"
+    assert output.risk_score == 88.35
+    assert output.ml_fallback_used is True
+    assert output.ml_fallback_reason == "model_confidence_below_threshold<0.60"
+    assert "ml_guardrail_fallback (applied) = model_confidence_below_threshold<0.60" in output.factors
