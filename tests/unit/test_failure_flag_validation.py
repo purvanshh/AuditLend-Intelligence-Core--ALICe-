@@ -81,6 +81,20 @@ def test_apply_request_model_accepts_valid_per_service_failure_modes() -> None:
     assert request.failure_flags.ml_model == "FORCE_CONFIDENCE_0.4"
 
 
+def test_apply_request_model_accepts_force_low_confidence_alias() -> None:
+    request = ApplyLoanRequest.model_validate(
+        {
+            **VALID_PAYLOAD,
+            "failure_flags": {
+                "ml_model": "FORCE_LOW_CONFIDENCE",
+            },
+        }
+    )
+
+    assert request.failure_flags is not None
+    assert request.failure_flags.ml_model == "FORCE_LOW_CONFIDENCE"
+
+
 def test_apply_request_model_rejects_invalid_cross_service_failure_modes() -> None:
     with pytest.raises(ValidationError):
         ApplyLoanRequest.model_validate(

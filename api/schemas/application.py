@@ -27,6 +27,7 @@ class MLModelFailureMode(StrEnum):
     SUCCESS = "SUCCESS"
     TIMEOUT = "TIMEOUT"
     FORCE_CONFIDENCE_0_4 = "FORCE_CONFIDENCE_0.4"
+    FORCE_LOW_CONFIDENCE = "FORCE_LOW_CONFIDENCE"
 
 
 class FailureFlags(BaseModel):

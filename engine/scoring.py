@@ -12,12 +12,16 @@ from ml.data.features import build_feature_row
 from ml.explain.shap_explainer import explain_feature_row
 from ml.governance.model_registry import ModelRegistry
 from ml.models.evaluate import find_latest_manifest, load_manifest
+from ml.models.train import OFFICIAL_MANIFEST_PATH
 from services import FailureType, ServiceResult
 
 
 DEFAULT_CREDIT_SCORE = 600
 DEFAULT_INCOME_STABILITY = 0.5
 ML_FEATURE_DATE = date(2026, 1, 1)
+OFFICIAL_MODEL_VERSION = "XGB_V1"
+_PRELOADED_ML_SCORER: "MLScorer | None" = None
+_PRELOAD_ATTEMPTED = False
 
 
 def compute_risk_score(
@@ -94,8 +98,13 @@ class MLScorer:
     def __init__(self, manifest_path: str | Path, *, model_version: str | None = None) -> None:
         self.manifest_path = Path(manifest_path)
         self.manifest = load_manifest(self.manifest_path)
-        self.model_version = model_version or str(self.manifest["run_id"])
-        self.selected_candidate = str(self.manifest["selected_candidate"])
+        self.uses_official_manifest = "model_artifact_path" in self.manifest
+        self.model_version = model_version or str(
+            self.manifest.get("model_version") or self.manifest.get("run_id") or OFFICIAL_MODEL_VERSION
+        )
+        self.selected_candidate = str(
+            self.manifest.get("selected_candidate") or self.manifest.get("model_version") or "xgboost"
+        )
 
     def score(
         self,
@@ -128,12 +137,12 @@ class MLScorer:
                 model_summary="ML scoring timed out, so the heuristic scorer was used instead.",
             )
 
-        if normalized_failure_mode == "FORCE_CONFIDENCE_0.4":
+        if normalized_failure_mode in {"FORCE_CONFIDENCE_0.4", "FORCE_LOW_CONFIDENCE"}:
             return MLScoringResult(
                 attempted=True,
                 used=False,
                 fallback_used=True,
-                fallback_reason="FORCE_CONFIDENCE_0.4",
+                fallback_reason="FORCE_LOW_CONFIDENCE",
                 error_type=None,
                 risk_score=None,
                 predicted_default_probability=0.4,
@@ -200,20 +209,50 @@ def ml_scoring_requested_from_env() -> bool:
 
 
 def clear_ml_scorer_cache() -> None:
+    global _PRELOADED_ML_SCORER, _PRELOAD_ATTEMPTED
     get_ml_scorer_from_env.cache_clear()
+    _PRELOADED_ML_SCORER = None
+    _PRELOAD_ATTEMPTED = False
+
+
+def preload_ml_scorer_from_env() -> MLScorer | None:
+    """Resolve and freeze the ML scorer at worker startup when ML is enabled."""
+
+    global _PRELOADED_ML_SCORER, _PRELOAD_ATTEMPTED
+    ml_requested = ml_scoring_requested_from_env() or bool(os.getenv("ML_MODEL_MANIFEST_PATH") or os.getenv("ML_MODEL_VERSION"))
+    if not ml_requested:
+        return None
+    _PRELOAD_ATTEMPTED = True
+    _PRELOADED_ML_SCORER = _load_ml_scorer_from_env(allow_latest_manifest_fallback=False)
+    return _PRELOADED_ML_SCORER
 
 
 @lru_cache(maxsize=1)
 def get_ml_scorer_from_env() -> MLScorer | None:
+    if _PRELOAD_ATTEMPTED:
+        return _PRELOADED_ML_SCORER
+    return _load_ml_scorer_from_env()
+
+
+def _load_ml_scorer_from_env(*, allow_latest_manifest_fallback: bool = True) -> MLScorer | None:
     model_version = os.getenv("ML_MODEL_VERSION")
     manifest_override = os.getenv("ML_MODEL_MANIFEST_PATH")
     if manifest_override:
         manifest_path = Path(manifest_override)
         if manifest_path.exists():
             manifest = load_manifest(manifest_path)
-            resolved_version = model_version or str(manifest["run_id"])
+            resolved_version = model_version or str(manifest.get("model_version") or manifest.get("run_id") or OFFICIAL_MODEL_VERSION)
             return MLScorer(manifest_path, model_version=resolved_version)
         return None
+
+    if OFFICIAL_MANIFEST_PATH.exists():
+        manifest = load_manifest(OFFICIAL_MANIFEST_PATH)
+        official_artifact_path = Path(str(manifest.get("model_artifact_path", "")))
+        if official_artifact_path.exists():
+            resolved_version = model_version or str(manifest.get("model_version") or OFFICIAL_MODEL_VERSION)
+            return MLScorer(OFFICIAL_MANIFEST_PATH, model_version=resolved_version)
+        if ml_scoring_requested_from_env():
+            return None
 
     registry_path = Path(os.getenv("MODEL_REGISTRY_PATH", "ml/governance/model_registry.json"))
     if registry_path.exists():
@@ -225,13 +264,16 @@ def get_ml_scorer_from_env() -> MLScorer | None:
         if record is not None:
             return MLScorer(record.manifest_path, model_version=record.model_version)
 
+    if not allow_latest_manifest_fallback:
+        return None
+
     try:
         manifest_path = find_latest_manifest()
     except FileNotFoundError:
         return None
 
     manifest = load_manifest(manifest_path)
-    return MLScorer(manifest_path, model_version=model_version or str(manifest["run_id"]))
+    return MLScorer(manifest_path, model_version=model_version or str(manifest.get("run_id") or OFFICIAL_MODEL_VERSION))
 
 
 def _build_ml_feature_row(
@@ -240,6 +282,10 @@ def _build_ml_feature_row(
     gst_result: ServiceResult,
     user_data: dict[str, Any],
 ) -> dict[str, Any]:
+    # AuditLend live applications do not carry the full Lending Club training schema.
+    # We map the available deterministic fields into the model's expected feature
+    # surface and use conservative proxies for fields that do not exist at decision
+    # time, such as revolving-trade history and account counts.
     monthly_income = float(user_data["monthly_income"])
     existing_emis = float(user_data.get("existing_emis", 0.0))
     loan_amount = float(user_data.get("loan_amount", 0.0))
@@ -249,6 +295,8 @@ def _build_ml_feature_row(
     credit_score = _extract_credit_score_value(credit_result)
     bank_data = bank_result.data or {}
     gst_data = gst_result.data or {}
+    # When bank-derived subfields are missing, we fall back to declared user inputs
+    # so inference remains deterministic and auditable rather than silently sparse.
     monthly_inflow = float(bank_data.get("monthly_inflow") or monthly_income)
     monthly_outflow = float(bank_data.get("monthly_outflow") or existing_emis)
     average_balance = float(bank_data.get("average_balance") or 0.0)

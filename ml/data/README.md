@@ -40,10 +40,10 @@ Phase 2 adds deterministic ingestion, feature engineering, and time-based split 
 
 Generated reports are written to `ml/data/reports/`.
 
-Because the local accepted-loans corpus ends on `2018-12-01`, the working split used in Phase 2 is:
+Because the local accepted-loans corpus ends on `2018-12-01`, the current official working split is:
 
-- Train: through `2015-12-31`
-- Validation: `2016-01-01` through `2017-12-31`
+- Train: `2007-01-01` through `2016-12-31`
+- Validation: `2017-01-01` through `2017-12-31`
 - Test: `2018-01-01` through `2018-12-31`
 
-This keeps a real held-out test period while staying faithful to the data currently available in the repository.
+This matches the PRD-aligned split used by the official `XGB_V1` training and evaluation workflow while staying faithful to the latest quarter currently available in the local corpus.

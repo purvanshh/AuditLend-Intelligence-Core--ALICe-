@@ -69,7 +69,8 @@ def test_ml_scorer_success_uses_calibrated_probability(monkeypatch, tmp_path: Pa
     ("failure_mode", "expected_reason", "expected_error_type"),
     [
         ("TIMEOUT", "TIMEOUT", "TIMEOUT"),
-        ("FORCE_CONFIDENCE_0.4", "FORCE_CONFIDENCE_0.4", None),
+        ("FORCE_CONFIDENCE_0.4", "FORCE_LOW_CONFIDENCE", None),
+        ("FORCE_LOW_CONFIDENCE", "FORCE_LOW_CONFIDENCE", None),
     ],
 )
 def test_ml_scorer_deterministic_failure_modes(monkeypatch, tmp_path: Path, failure_mode: str, expected_reason: str, expected_error_type: str | None) -> None:
@@ -146,6 +147,23 @@ def test_get_ml_scorer_from_env_uses_manifest_override(monkeypatch, tmp_path: Pa
     scoring.clear_ml_scorer_cache()
     monkeypatch.delenv("ML_MODEL_MANIFEST_PATH", raising=False)
     monkeypatch.delenv("ML_MODEL_VERSION", raising=False)
+
+
+def test_preload_ml_scorer_from_env_freezes_missing_model(monkeypatch, tmp_path: Path) -> None:
+    official_manifest = tmp_path / "manifest.yaml"
+    official_manifest.write_text('{"model_version":"XGB_V1","model_artifact_path":"missing.pkl"}\n', encoding="utf-8")
+    monkeypatch.setenv("ML_ENABLED", "true")
+    monkeypatch.setattr(scoring, "OFFICIAL_MANIFEST_PATH", official_manifest)
+    scoring.clear_ml_scorer_cache()
+
+    preloaded = scoring.preload_ml_scorer_from_env()
+    loaded = scoring.get_ml_scorer_from_env()
+
+    assert preloaded is None
+    assert loaded is None
+
+    scoring.clear_ml_scorer_cache()
+    monkeypatch.delenv("ML_ENABLED", raising=False)
 
 
 def test_scoring_helpers_cover_edge_cases() -> None:

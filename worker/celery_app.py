@@ -6,12 +6,24 @@ from celery import Celery
 from celery.signals import worker_ready
 import structlog
 
+from engine.scoring import preload_ml_scorer_from_env
 from services.logging import setup_logging
 
 
 setup_logging()
 logger = structlog.get_logger()
 _health_server_started = False
+_preloaded_ml_scorer = preload_ml_scorer_from_env()
+if os.getenv("ML_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if _preloaded_ml_scorer is None:
+        logger.error("worker_ml_model_preload_failed", step="ML_STARTUP", manifest_path=os.getenv("ML_MODEL_MANIFEST_PATH", "ml/models/manifest.yaml"))
+    else:
+        logger.info(
+            "worker_ml_model_preloaded",
+            step="ML_STARTUP",
+            model_version=_preloaded_ml_scorer.model_version,
+            manifest_path=str(_preloaded_ml_scorer.manifest_path),
+        )
 
 celery_app = Celery(
     "auditlend",

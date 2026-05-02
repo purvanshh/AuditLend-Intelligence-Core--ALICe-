@@ -50,6 +50,15 @@
   - Simulated profit delta, ML minus heuristic: `68294107.00`
 - On this held-out benchmark, `XGB_V1` achieved both a modestly higher approval rate and a materially lower approved-loan default rate.
 
+## Inference Proxy Mapping
+
+- AuditLend live applications do not carry the full Lending Club schema used during training, so `engine/scoring.py` maps the available application and mock-provider data into the model feature surface deterministically.
+- `monthly_inflow` falls back to declared `monthly_income` when bank-derived inflow is unavailable.
+- `monthly_outflow` falls back to declared `existing_emis` when bank-derived outflow is unavailable.
+- `employment_length_years`, account-count style features, and revolving-trade history are conservative placeholders at live inference time because the runtime schema does not provide direct equivalents.
+- `revol_util_pct` and related utilization fields are derived from income-stability and payment-ratio proxies rather than real bureau tradeline utilization in the live reference stack.
+- These proxy values are deterministic, audited, and intentionally conservative; they make the ML path reproducible for this repository, but they should not be mistaken for a production bureau-feature mapping.
+
 ## Adding A New Rule Set
 
 1. Create a new immutable `RuleSet` instance in `engine/rule_sets.py` with a unique version.

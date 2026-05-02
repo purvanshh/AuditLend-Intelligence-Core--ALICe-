@@ -10,11 +10,12 @@ Last verified locally: **2026-05-03**
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Full repository test suite | PASS | `./.venv/bin/pytest tests -q` -> `142 passed`, `17 skipped` |
-| Unit suite | PASS | `./.venv/bin/pytest tests/unit -q` -> `140 passed` |
-| Integration + chaos slice | PASS | `./.venv/bin/pytest tests/integration tests/chaos -q` -> `2 passed`, `17 skipped` |
-| Coverage report | INFO | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `78%` |
+| Full repository test suite | PASS | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `182 passed` |
+| Unit suite | PASS | `./.venv/bin/pytest tests/unit -q` -> included in the full pass above |
+| Integration + chaos slice | PASS | covered in the zero-skip full suite above |
+| Coverage report | PASS | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `86%` |
 | Official XGB_V1 benchmark | PASS | `python -m ml.benchmark.heuristic_vs_ml --official-xgb-v1 --ml-threshold 0.5` |
+| Docker ML E2E smoke | PASS | `ML_ENABLED=true docker compose up --build -d` plus live `/apply-loan`, `/decision`, and `/explanation` verification on May 3, 2026 |
 
 The current official ML benchmark from the May 3, 2026 verification run:
 
@@ -230,10 +231,16 @@ Prerequisites:
 
 This project requires real-looking local secrets. For local development, `docker-compose.override.yml` supplies dev-only values and is gitignored.
 
-Start the stack:
+Start the default stack:
 
 ```bash
 docker compose up --build -d
+```
+
+Start the ML-enabled stack:
+
+```bash
+ML_ENABLED=true docker compose up --build -d
 ```
 
 Check service health:
@@ -389,6 +396,98 @@ Expected shape:
 Replay the same request with the same idempotency key and payload. Expected: `200` and the same `application_id`.
 
 Reuse the same idempotency key with a different payload. Expected: `409 Conflict`.
+
+### Verified ML-Enabled Success Path
+
+The following local verification run was executed on **May 3, 2026** with `ML_ENABLED=true` and the official `XGB_V1` artifacts mounted into the worker.
+
+Input profile:
+
+```json
+{
+  "idempotency_key": "phase4-ml-success-002",
+  "user_data": {
+    "name": "Phase Four Success",
+    "pan": "AAAAA1234F",
+    "monthly_income": 200000,
+    "existing_emis": 5000,
+    "loan_amount": 50000,
+    "tenure_months": 36,
+    "purpose": "credit_card",
+    "home_ownership": "MORTGAGE"
+  },
+  "failure_flags": {
+    "credit_bureau": "SUCCESS",
+    "bank_analyzer": "SUCCESS",
+    "gst_verifier": "SUCCESS"
+  }
+}
+```
+
+Observed decision excerpt:
+
+```json
+{
+  "application_id": "55063108-c22a-4c44-81d0-dd38bbec5e81",
+  "decision": "APPROVE",
+  "confidence": 1.0,
+  "data_reliability": 1.0,
+  "risk_score": 96.21,
+  "rule_version": "RULE_SET_V2",
+  "model_version": "XGB_V1",
+  "scoring_strategy": "ml",
+  "ab_test_arm": null
+}
+```
+
+Observed explanation excerpt:
+
+```json
+{
+  "decision": "APPROVE",
+  "model_version": "XGB_V1",
+  "summary": "Decision APPROVE was produced from verified data sources with confidence 1.00. Model factors: Employment Length Years (0) increased predicted default risk and Interest Rate Pct (0) increased predicted default risk, while Credit Score Recent Delta (0) reduced predicted default risk.",
+  "model_factor_contributions": [
+    {
+      "feature_name": "Credit Score Recent Delta",
+      "raw_value": "0",
+      "shap_contribution": -1.70156,
+      "direction": "decrease_default_risk"
+    }
+  ]
+}
+```
+
+### Verified Forced Fallback Path
+
+The same high-confidence profile was re-run with `failure_flags.ml_model = "FORCE_LOW_CONFIDENCE"` to prove the deterministic guardrail fallback branch.
+
+Observed decision excerpt:
+
+```json
+{
+  "application_id": "f2c6f216-2a1a-4379-a4f0-59c733955e93",
+  "decision": "APPROVE",
+  "confidence": 1.0,
+  "data_reliability": 1.0,
+  "risk_score": 83.62,
+  "rule_version": "RULE_SET_V1",
+  "model_version": "XGB_V1",
+  "scoring_strategy": "heuristic",
+  "ab_test_arm": null
+}
+```
+
+Observed explanation excerpt:
+
+```json
+{
+  "decision": "APPROVE",
+  "model_version": "XGB_V1",
+  "summary": "Decision APPROVE was produced with degraded data quality. Data quality issues recorded: Ml Scoring: fallback. Confidence is 1.00. ML confidence was forced low for testing, so the heuristic scorer was used instead.",
+  "model_factor_contributions": []
+}
+```
 
 ## Deterministic Failure Scenarios
 

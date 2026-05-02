@@ -118,6 +118,8 @@ services:
     command: celery -A worker.celery_app worker --loglevel=info --concurrency=2
     ports:
       - "8004:8004"
+    volumes:
+      - ./ml/models:/app/ml/models:ro
     environment:
       DATABASE_URL: postgresql://auditlend:auditlend@postgres:5432/auditlend
       ASYNC_DATABASE_URL: postgresql+asyncpg://auditlend:auditlend@postgres:5432/auditlend
@@ -127,6 +129,9 @@ services:
       BANK_ANALYZER_URL: http://bank-analyzer:8002
       GST_VERIFIER_URL: http://gst-verifier:8003
       CONFIDENCE_THRESHOLD: "0.6"
+      ML_ENABLED: ${ML_ENABLED:-false}
+      ML_MODEL_MANIFEST_PATH: /app/ml/models/manifest.yaml
+      ML_MODEL_VERSION: ${ML_MODEL_VERSION:-XGB_V1}
       PII_ENCRYPTION_KEY: ${PII_ENCRYPTION_KEY:-}
       PAN_HASH_SALT: ${PAN_HASH_SALT:-}
       API_KEYS: ${API_KEYS:-}

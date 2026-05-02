@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ml.models.evaluate import load_manifest, load_model_artifact
-from ml.models.train import MODEL_CATEGORICAL_FEATURES, encode_feature_row, predict_probabilities
+from ml.models.train import MODEL_CATEGORICAL_FEATURES, OFFICIAL_INPUT_FEATURES, encode_feature_row, predict_probabilities
 
 
 DISPLAY_NAME_OVERRIDES: dict[str, str] = {
@@ -88,6 +88,9 @@ def explain_feature_row(
     """Explain one engineered feature row using the trained Phase 3/5 artifact bundle."""
 
     manifest = load_manifest(manifest_path)
+    if _is_official_manifest(manifest):
+        return _explain_official_feature_row(feature_row, manifest, max_features=max_features)
+
     model = load_model_artifact(manifest["artifact_path"])
     feature_names = [str(name) for name in manifest["feature_names"]]
     categories_by_feature = {
@@ -128,12 +131,63 @@ def explain_feature_row(
     )
 
 
+def _is_official_manifest(manifest: dict[str, Any]) -> bool:
+    return "model_artifact_path" in manifest
+
+
+def _explain_official_feature_row(
+    feature_row: dict[str, Any],
+    manifest: dict[str, Any],
+    *,
+    max_features: int,
+) -> PredictionExplanation:
+    model = load_model_artifact(manifest["model_artifact_path"])
+    model_input = _build_official_model_input(feature_row)
+    predicted_default_probability = predict_probabilities(model, model_input)[0]
+    calibrated_default_probability = _apply_optional_calibrator(
+        Path(str(manifest["calibrator_artifact_path"])),
+        predicted_default_probability,
+    )
+    shap_values, baseline_value, feature_names = _compute_official_shap_values(model, model_input)
+    contributions = _aggregate_contributions(
+        feature_row,
+        feature_names,
+        shap_values,
+        max_features=max_features,
+    )
+    model_summary = _build_model_summary(contributions)
+    model_version = str(manifest.get("model_version", "XGB_V1"))
+
+    return PredictionExplanation(
+        model_version=model_version,
+        selected_candidate=str(manifest.get("selected_candidate") or model_version),
+        predicted_default_probability=round(float(predicted_default_probability), 6),
+        calibrated_default_probability=(
+            round(float(calibrated_default_probability), 6)
+            if calibrated_default_probability is not None
+            else None
+        ),
+        explanation_method="shap",
+        baseline_value=round(float(baseline_value), 6),
+        model_factor_contributions=contributions,
+        model_summary=model_summary,
+    )
+
+
 def _build_model_input(encoded_row: Sequence[float], feature_names: Sequence[str]):
     try:
         import pandas as pd
     except ImportError:
         return [list(encoded_row)]
     return pd.DataFrame([list(encoded_row)], columns=list(feature_names))
+
+
+def _build_official_model_input(feature_row: dict[str, Any]):
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise RuntimeError("Official XGB_V1 explanations require pandas for DataFrame-backed preprocessing.") from exc
+    return pd.DataFrame([{feature_name: feature_row.get(feature_name) for feature_name in OFFICIAL_INPUT_FEATURES}])
 
 
 def _compute_shap_values(model: Any, model_input: Any) -> tuple[list[float], float]:
@@ -151,6 +205,22 @@ def _compute_shap_values(model: Any, model_input: Any) -> tuple[list[float], flo
         baseline_value = explanation.base_values
 
     return _normalize_shap_output(shap_values, baseline_value, np)
+
+
+def _compute_official_shap_values(model: Any, model_input: Any) -> tuple[list[float], float, list[str]]:
+    import numpy as np
+    import shap
+
+    if not hasattr(model, "preprocessor") or not hasattr(model, "classifier"):
+        raise TypeError("Official XGB_V1 explanations require a preprocessed official model bundle.")
+
+    transformed = model.preprocessor.transform(model_input)
+    explainer = shap.TreeExplainer(model.classifier)
+    shap_values = explainer.shap_values(transformed, check_additivity=False)
+    baseline_value = explainer.expected_value
+    normalized_values, normalized_base = _normalize_shap_output(shap_values, baseline_value, np)
+    feature_names = model.get_feature_names() if hasattr(model, "get_feature_names") else list(OFFICIAL_INPUT_FEATURES)
+    return normalized_values, normalized_base, feature_names
 
 
 def _supports_tree_explainer(model: Any) -> bool:

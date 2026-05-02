@@ -1,4 +1,10 @@
-"""Feature engineering and exploratory summaries for the AuditLend ML pipeline."""
+"""Feature engineering and exploratory summaries for the AuditLend ML pipeline.
+
+The same engineered feature surface is reused at live inference time, but some
+fields that exist in Lending Club training data are filled with conservative
+deterministic proxies in ``engine/scoring.py`` because AuditLend applications do
+not carry the full historical tradeline schema.
+"""
 
 from __future__ import annotations
 

@@ -7,7 +7,12 @@ from pathlib import Path
 
 from ml.data.features import build_feature_row
 from ml.explain.shap_explainer import explain_feature_row
-from ml.models.train import build_model_feature_names, encode_feature_row, infer_categories
+from ml.models.train import OFFICIAL_INPUT_FEATURES, build_model_feature_names, encode_feature_row, infer_categories
+
+
+class _PickleableFakeCalibrator:
+    def predict(self, values):
+        return [0.16 for _ in values]
 
 
 def test_explain_feature_row_returns_ranked_contributions(tmp_path: Path) -> None:
@@ -77,6 +82,65 @@ def test_explain_feature_row_returns_ranked_contributions(tmp_path: Path) -> Non
         abs(float(row["shap_contribution"])) for row in payload["model_factor_contributions"]
     ]
     assert absolute_contributions == sorted(absolute_contributions, reverse=True)
+
+
+def test_explain_feature_row_supports_official_manifest(monkeypatch, tmp_path: Path) -> None:
+    class FakePreprocessor:
+        def transform(self, frame):
+            return frame
+
+    class FakeClassifier:
+        feature_importances_ = [0.1] * len(OFFICIAL_INPUT_FEATURES)
+
+    class FakeOfficialModel:
+        preprocessor = FakePreprocessor()
+        classifier = FakeClassifier()
+
+        def predict_proba(self, frame):
+            return [[0.82, 0.18]]
+
+        def get_feature_names(self):
+            return list(OFFICIAL_INPUT_FEATURES)
+
+    class FakeTreeExplainer:
+        expected_value = 0.12
+
+        def __init__(self, classifier):
+            self.classifier = classifier
+
+        def shap_values(self, transformed, check_additivity=False):
+            return [[0.01 for _ in OFFICIAL_INPUT_FEATURES]]
+
+    monkeypatch.setattr(
+        "ml.explain.shap_explainer.load_model_artifact",
+        lambda path: FakeOfficialModel() if str(path).endswith("model.pkl") else _PickleableFakeCalibrator(),
+    )
+    monkeypatch.setattr("ml.explain.shap_explainer.predict_probabilities", lambda model, X, feature_names=None: [0.18])
+
+    import shap
+
+    monkeypatch.setattr(shap, "TreeExplainer", FakeTreeExplainer)
+
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "model_version": "XGB_V1",
+                "model_artifact_path": str(tmp_path / "model.pkl"),
+                "calibrator_artifact_path": str(tmp_path / "cal.pkl"),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with (tmp_path / "cal.pkl").open("wb") as handle:
+        pickle.dump(_PickleableFakeCalibrator(), handle)
+
+    explanation = explain_feature_row(_build_feature_row("100", 18.0, 660.0, "RENT", 1), manifest_path, max_features=3)
+
+    assert explanation.model_version == "XGB_V1"
+    assert explanation.calibrated_default_probability == 0.16
+    assert len(explanation.model_factor_contributions) == 3
 
 
 def _build_feature_row(
