@@ -68,6 +68,34 @@ class SegmentSummary:
 
 
 @dataclass(frozen=True)
+class FairnessGroupSummary:
+    """Fairness diagnostics for one protected-value group."""
+
+    group_value: str
+    row_count: int
+    actual_non_default_count: int
+    approval_rate: float
+    true_positive_rate: float
+    statistical_parity_difference: float
+    equal_opportunity_difference: float
+
+
+@dataclass(frozen=True)
+class FairnessAnalysis:
+    """Reference fairness analysis for one proxy attribute."""
+
+    protected_attribute: str
+    threshold: float
+    reference_group: str
+    reference_row_count: int
+    reference_approval_rate: float
+    reference_true_positive_rate: float
+    max_abs_statistical_parity_difference: float
+    max_abs_equal_opportunity_difference: float
+    groups: list[FairnessGroupSummary]
+
+
+@dataclass(frozen=True)
 class EvaluationSplitSummary:
     """Model metrics and diagnostics for one split."""
 
@@ -123,6 +151,7 @@ class OfficialEvaluationReport:
     raw_splits: dict[str, dict[str, Any]]
     calibrated_splits: dict[str, dict[str, Any]]
     top_feature_importance: list[dict[str, float]]
+    fairness_analyses: list[dict[str, Any]]
 
 
 def load_manifest(manifest_path: str | Path) -> dict[str, Any]:
@@ -359,6 +388,111 @@ def compute_segment_diagnostics(
     return sorted(summaries, key=lambda summary: (summary.segment_field, -summary.row_count, summary.segment_value))
 
 
+def fairness_analysis(
+    rows: Sequence[dict[str, Any]],
+    probabilities: Sequence[float],
+    protected_attribute: str,
+    *,
+    threshold: float = 0.5,
+    min_count: int = 250,
+    max_groups: int = 12,
+) -> FairnessAnalysis:
+    """Compute approval-rate and equal-opportunity disparities for one proxy attribute.
+
+    This analysis treats approval as the favorable outcome:
+    - predicted favorable outcome: calibrated default probability < threshold
+    - actual favorable outcome: non-default loan outcome
+    """
+
+    grouped: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    for row, probability in zip(rows, probabilities, strict=True):
+        group_value = _normalize_group_value(row.get(protected_attribute))
+        grouped[group_value].append((int(row.get("target_defaulted", 0)), float(probability)))
+
+    eligible_groups = [
+        (group_value, values)
+        for group_value, values in grouped.items()
+        if len(values) >= min_count
+    ]
+    if not eligible_groups:
+        eligible_groups = list(grouped.items())
+    eligible_groups = sorted(eligible_groups, key=lambda item: (-len(item[1]), item[0]))[:max(max_groups, 1)]
+
+    if not eligible_groups:
+        return FairnessAnalysis(
+            protected_attribute=protected_attribute,
+            threshold=threshold,
+            reference_group="UNKNOWN",
+            reference_row_count=0,
+            reference_approval_rate=0.0,
+            reference_true_positive_rate=0.0,
+            max_abs_statistical_parity_difference=0.0,
+            max_abs_equal_opportunity_difference=0.0,
+            groups=[],
+        )
+
+    reference_group, reference_values = eligible_groups[0]
+    reference_approval_rate = _approval_rate(reference_values, threshold)
+    reference_true_positive_rate = _true_positive_rate_for_favorable_outcome(reference_values, threshold)
+
+    summaries: list[FairnessGroupSummary] = []
+    for group_value, values in eligible_groups:
+        approval_rate = _approval_rate(values, threshold)
+        true_positive_rate = _true_positive_rate_for_favorable_outcome(values, threshold)
+        actual_non_default_count = sum(1 for target, _ in values if target == 0)
+        summaries.append(
+            FairnessGroupSummary(
+                group_value=group_value,
+                row_count=len(values),
+                actual_non_default_count=actual_non_default_count,
+                approval_rate=round(approval_rate, 6),
+                true_positive_rate=round(true_positive_rate, 6),
+                statistical_parity_difference=round(approval_rate - reference_approval_rate, 6),
+                equal_opportunity_difference=round(true_positive_rate - reference_true_positive_rate, 6),
+            )
+        )
+
+    return FairnessAnalysis(
+        protected_attribute=protected_attribute,
+        threshold=threshold,
+        reference_group=reference_group,
+        reference_row_count=len(reference_values),
+        reference_approval_rate=round(reference_approval_rate, 6),
+        reference_true_positive_rate=round(reference_true_positive_rate, 6),
+        max_abs_statistical_parity_difference=round(
+            max(abs(summary.statistical_parity_difference) for summary in summaries),
+            6,
+        ),
+        max_abs_equal_opportunity_difference=round(
+            max(abs(summary.equal_opportunity_difference) for summary in summaries),
+            6,
+        ),
+        groups=summaries,
+    )
+
+
+def _normalize_group_value(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or normalized.lower() in {"nan", "<na>", "none"}:
+        return "UNKNOWN"
+    return normalized
+
+
+def _approval_rate(values: Sequence[tuple[int, float]], threshold: float) -> float:
+    if not values:
+        return 0.0
+    approvals = sum(1 for _, probability in values if probability < threshold)
+    return approvals / len(values)
+
+
+def _true_positive_rate_for_favorable_outcome(values: Sequence[tuple[int, float]], threshold: float) -> float:
+    actual_non_defaults = [(target, probability) for target, probability in values if target == 0]
+    if not actual_non_defaults:
+        return 0.0
+    predicted_approvals = sum(1 for _, probability in actual_non_defaults if probability < threshold)
+    return predicted_approvals / len(actual_non_defaults)
+
+
 def evaluate_manifest(
     manifest_path: str | Path,
     *,
@@ -569,12 +703,14 @@ def evaluate_official_xgb_v1(
 
     raw_summaries: dict[str, dict[str, Any]] = {}
     calibrated_summaries: dict[str, dict[str, Any]] = {}
+    calibrated_probabilities_by_split: dict[str, list[float]] = {}
     for split_name in ("train", "validation", "test"):
         split_frame = prepared_dataset.split_frames[split_name]
         probabilities_raw = predict_probabilities(model, split_frame.loc[:, OFFICIAL_INPUT_FEATURES])
         probabilities_calibrated = [
             min(max(float(value), 0.0), 1.0) for value in calibrator.predict(list(probabilities_raw))
         ]
+        calibrated_probabilities_by_split[split_name] = probabilities_calibrated
         y_true = [int(value) for value in split_frame["target_defaulted"].tolist()]
         raw_summaries[split_name] = {
             "metrics": metric_set_to_dict(compute_binary_metrics(y_true, probabilities_raw)),
@@ -584,6 +720,18 @@ def evaluate_official_xgb_v1(
             "metrics": metric_set_to_dict(compute_binary_metrics(y_true, probabilities_calibrated)),
             "calibration": asdict(compute_expected_calibration_error(y_true, probabilities_calibrated, bins=ece_bins)),
         }
+
+    test_frame = prepared_dataset.split_frames["test"]
+    fairness_analyses = [
+        asdict(
+            fairness_analysis(
+                test_frame.to_dict(orient="records"),
+                calibrated_probabilities_by_split["test"],
+                protected_attribute,
+            )
+        )
+        for protected_attribute in ("zip_code_prefix", "employment_length_band")
+    ]
 
     report_dir_path = Path(report_dir)
     report_dir_path.mkdir(parents=True, exist_ok=True)
@@ -597,6 +745,7 @@ def evaluate_official_xgb_v1(
         raw_splits=raw_summaries,
         calibrated_splits=calibrated_summaries,
         top_feature_importance=list(manifest.get("top_feature_importance", [])),
+        fairness_analyses=fairness_analyses,
     )
     write_official_evaluation_report(report_path, report)
     return report
@@ -641,6 +790,41 @@ def write_official_evaluation_report(output_path: str | Path, report: OfficialEv
     )
     for row in report.top_feature_importance[:15]:
         lines.append(f"| {row['feature']} | {row['importance']:.8f} |")
+
+    if report.fairness_analyses:
+        lines.extend(
+            [
+                "",
+                "## Fairness Reference Analysis",
+                "",
+                "Approval is treated as the favorable outcome in this reference analysis.",
+            ]
+        )
+        for analysis in report.fairness_analyses:
+            lines.extend(
+                [
+                    "",
+                    f"### `{analysis['protected_attribute']}`",
+                    "",
+                    f"- Threshold: `{analysis['threshold']:.2f}`",
+                    f"- Reference group: `{analysis['reference_group']}` ({analysis['reference_row_count']} rows)",
+                    f"- Reference approval rate: `{analysis['reference_approval_rate']:.6f}`",
+                    f"- Reference equal opportunity: `{analysis['reference_true_positive_rate']:.6f}`",
+                    f"- Max |statistical parity difference|: `{analysis['max_abs_statistical_parity_difference']:.6f}`",
+                    f"- Max |equal opportunity difference|: `{analysis['max_abs_equal_opportunity_difference']:.6f}`",
+                    "",
+                    "| Group | Rows | Non-default Rows | Approval Rate | SPD | Equal Opportunity | EOD |",
+                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+            )
+            for group_row in analysis["groups"]:
+                lines.append(
+                    "| "
+                    f"{group_row['group_value']} | {group_row['row_count']} | "
+                    f"{group_row['actual_non_default_count']} | {group_row['approval_rate']:.6f} | "
+                    f"{group_row['statistical_parity_difference']:.6f} | {group_row['true_positive_rate']:.6f} | "
+                    f"{group_row['equal_opportunity_difference']:.6f} |"
+                )
 
     path = Path(output_path)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

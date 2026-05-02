@@ -36,6 +36,7 @@ OFFICIAL_FEATURE_SPEC_PATH = Path("ml/models/XGB_V1_features.json")
 OFFICIAL_MANIFEST_PATH = Path("ml/models/manifest.yaml")
 OFFICIAL_SEARCH_RESULTS_PATH = Path("ml/models/XGB_V1_search_results.jsonl")
 OFFICIAL_INPUT_FEATURES: tuple[str, ...] = MODEL_NUMERIC_FEATURES + MODEL_CATEGORICAL_FEATURES
+OFFICIAL_PROXY_FEATURES: tuple[str, ...] = ("zip_code_prefix", "employment_length_band")
 
 
 @dataclass(frozen=True)
@@ -686,9 +687,11 @@ def prepare_official_training_dataset(
     }
     identity_hash = sha256()
 
+    requested_columns = list(MODELING_COLUMNS) + ["zip_code"]
+    available_columns = _available_csv_columns(data_path)
     reader = pd.read_csv(
         data_path,
-        usecols=list(MODELING_COLUMNS),
+        usecols=[column for column in requested_columns if column in available_columns],
         chunksize=chunk_size,
         low_memory=False,
     )
@@ -707,7 +710,7 @@ def prepare_official_training_dataset(
                 identity_hash.update(str(row[2]).encode("utf-8"))
 
     feature_columns = list(OFFICIAL_INPUT_FEATURES)
-    ordered_columns = ["loan_id", "issue_date"] + feature_columns + ["target_defaulted"]
+    ordered_columns = ["loan_id", "issue_date"] + list(OFFICIAL_PROXY_FEATURES) + feature_columns + ["target_defaulted"]
     split_frames = {
         split_name: (
             pd.concat(parts, ignore_index=True).loc[:, ordered_columns]
@@ -934,6 +937,8 @@ def _build_official_feature_chunk(raw_chunk):
             "purpose": _clean_string_series(frame["purpose"]),
             "home_ownership": _clean_string_series(frame["home_ownership"]),
             "verification_status": _clean_string_series(frame["verification_status"]),
+            "zip_code_prefix": _zip_code_prefix_series(frame),
+            "employment_length_band": _employment_length_band_series(frame["emp_length"]),
             "loan_amount": loan_amount,
             "funded_amount": _numeric_series(frame["funded_amnt"]).fillna(0.0).astype("float32"),
             "term_months": term_months,
@@ -997,6 +1002,17 @@ def _clean_string_series(series):
     return series.astype("string").fillna("").str.strip().replace("", "UNKNOWN")
 
 
+def _available_csv_columns(data_path):
+    import pandas as pd
+
+    preview = pd.read_csv(data_path, nrows=0)
+    if hasattr(preview, "columns"):
+        return set(preview.columns.tolist())
+    if isinstance(preview, list) and preview and hasattr(preview[0], "columns"):
+        return set(preview[0].columns.tolist())
+    return set(MODELING_COLUMNS)
+
+
 def _numeric_series(series):
     import pandas as pd
 
@@ -1027,6 +1043,36 @@ def _employment_length_series(series):
     )
     extracted = mapped.str.extract(r"([0-9]+(?:\.[0-9]+)?)")[0]
     return _numeric_series(extracted).fillna(0.0)
+
+
+def _employment_length_band_series(series):
+    import pandas as pd
+
+    numeric_years = _employment_length_series(series)
+    banded = []
+    for value in numeric_years.tolist():
+        years = float(value)
+        if years <= 0.0:
+            banded.append("0")
+        elif years < 3.0:
+            banded.append("1-2")
+        elif years < 6.0:
+            banded.append("3-5")
+        elif years < 10.0:
+            banded.append("6-9")
+        else:
+            banded.append("10+")
+    return pd.Series(banded, index=numeric_years.index, dtype="string").fillna("UNKNOWN")
+
+
+def _zip_code_prefix_series(frame):
+    import pandas as pd
+
+    if "zip_code" not in frame.columns:
+        return pd.Series(["UNKNOWN"] * len(frame), index=frame.index, dtype="string")
+    cleaned = frame["zip_code"].astype("string").fillna("").str.strip()
+    prefixes = cleaned.str.extract(r"([0-9]{3})", expand=False).fillna("UNKNOWN")
+    return prefixes.astype("string")
 
 
 def _deterministic_search_slice(frame, *, max_rows: int):

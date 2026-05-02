@@ -7,6 +7,7 @@ from ml.models.evaluate import (
     compute_confusion_matrix_summary,
     compute_expected_calibration_error,
     evaluate_manifest,
+    fairness_analysis,
     summarize_candidate_comparison,
 )
 from ml.models.train import CandidateDefinition, TrainingConfig, run_training
@@ -497,3 +498,30 @@ def test_evaluate_manifest_writes_report(monkeypatch, tmp_path):
     assert report.selected_candidate in {"candidate_a", "candidate_b"}
     assert report.evaluation_splits["test"]["metrics"]["row_count"] == 2
     assert len(report.candidate_comparison) == 2
+
+
+def test_fairness_analysis_computes_reference_disparities():
+    rows = [
+        {"zip_code_prefix": "111", "target_defaulted": 0},
+        {"zip_code_prefix": "111", "target_defaulted": 0},
+        {"zip_code_prefix": "111", "target_defaulted": 1},
+        {"zip_code_prefix": "222", "target_defaulted": 0},
+        {"zip_code_prefix": "222", "target_defaulted": 1},
+        {"zip_code_prefix": "222", "target_defaulted": 1},
+    ]
+    probabilities = [0.10, 0.20, 0.70, 0.15, 0.55, 0.80]
+
+    summary = fairness_analysis(
+        rows,
+        probabilities,
+        "zip_code_prefix",
+        threshold=0.5,
+        min_count=1,
+    )
+
+    assert summary.reference_group == "111"
+    assert summary.reference_approval_rate == 0.666667
+    assert summary.reference_true_positive_rate == 1.0
+    assert summary.max_abs_statistical_parity_difference == 0.333333
+    assert summary.max_abs_equal_opportunity_difference == 0.0
+    assert [group.group_value for group in summary.groups] == ["111", "222"]

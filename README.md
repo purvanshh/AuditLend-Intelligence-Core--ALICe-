@@ -10,7 +10,7 @@ Last verified locally: **2026-05-03**
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Full repository test suite | PASS | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `182 passed` |
+| Full repository test suite | PASS | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `187 passed` |
 | Unit suite | PASS | `./.venv/bin/pytest tests/unit -q` -> included in the full pass above |
 | Integration + chaos slice | PASS | covered in the zero-skip full suite above |
 | Coverage report | PASS | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `86%` |
@@ -215,6 +215,15 @@ Benchmark metrics from `ml/benchmark/reports/XGB_V1_heuristic_vs_ml.md` at the `
 | XGB_V1 | `0.857526` | `0.023498` | `58939506.50` |
 
 On this held-out 2018 benchmark, `XGB_V1` improved both headline PRD directions at the chosen threshold: approval rate increased by `0.006155` while default rate on approved loans dropped by `0.127052`.
+
+Proxy fairness analysis from `ml/models/reports/XGB_V1_evaluation.md` on the held-out 2018 test split:
+
+| Proxy Attribute | Reference Group | Max \|SPD\| | Max \|EOD\| | Largest Observed Gap |
+| --- | --- | ---: | ---: | --- |
+| `zip_code_prefix` | `945` | `0.124725` | `0.015766` | prefix `104` had approval-rate SPD `-0.124725` vs the reference group |
+| `employment_length_band` | `10+` | `0.061652` | `0.008574` | band `0` had approval-rate SPD `-0.061652` vs the reference group |
+
+These are reference fairness diagnostics based on proxy groupings from Lending Club data, not protected-class measurements. Approval is treated as the favorable outcome, and equal opportunity is measured on the non-default class.
 
 Install ML-only dependencies separately from the core API/runtime stack:
 

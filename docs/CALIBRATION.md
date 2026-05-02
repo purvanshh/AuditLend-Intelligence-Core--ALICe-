@@ -59,6 +59,25 @@
 - `revol_util_pct` and related utilization fields are derived from income-stability and payment-ratio proxies rather than real bureau tradeline utilization in the live reference stack.
 - These proxy values are deterministic, audited, and intentionally conservative; they make the ML path reproducible for this repository, but they should not be mistaken for a production bureau-feature mapping.
 
+## Fairness Reference Analysis
+
+- The official `XGB_V1` evaluation now includes a proxy fairness pass on the held-out 2018 test split.
+- Approval is treated as the favorable outcome: a loan is considered approved when calibrated default probability is below `0.50`.
+- Equal opportunity is measured on the non-default class, since this is the favorable repayment outcome for lending decisions.
+- Because Lending Club does not contain explicit protected-class fields, this analysis uses proxy groupings only and should be interpreted as a reference diagnostic, not a compliance conclusion.
+
+| Proxy Attribute | Reference Group | Reference Approval Rate | Reference Equal Opportunity | Max \|SPD\| | Max \|EOD\| |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `zip_code_prefix` | `945` | `0.876106` | `0.993814` | `0.124725` | `0.015766` |
+| `employment_length_band` | `10+` | `0.880796` | `0.988096` | `0.061652` | `0.008574` |
+
+Largest observed proxy disparities from the May 3, 2026 held-out run:
+
+- `zip_code_prefix=104` showed approval-rate SPD `-0.124725` and EOD `-0.012541` relative to the `945` reference group.
+- `employment_length_band=0` showed approval-rate SPD `-0.061652` and EOD `-0.008574` relative to the `10+` reference group.
+
+The full table for each included proxy group is written to `ml/models/reports/XGB_V1_evaluation.md`.
+
 ## Adding A New Rule Set
 
 1. Create a new immutable `RuleSet` instance in `engine/rule_sets.py` with a unique version.
