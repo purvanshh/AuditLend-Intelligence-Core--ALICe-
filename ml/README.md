@@ -70,10 +70,10 @@ python -m ml.benchmark.heuristic_vs_ml --manifest-path ml/models/experiments/<ru
 
 ## Local Verification Snapshot
 
-Latest local smoke artifact set:
+Latest official artifact set:
 
-- Evaluation report: `ml/models/reports/20260502T184238Z-smoke3_evaluation.md`
-- Calibration report: `ml/models/reports/20260502T184238Z-smoke3_calibration.md`
-- Benchmark report: `ml/benchmark/reports/20260502T184238Z-smoke3_heuristic_vs_ml.md`
+- Manifest: `ml/models/manifest.yaml`
+- Evaluation report: `ml/models/reports/XGB_V1_evaluation.md`
+- Benchmark report: `ml/benchmark/reports/XGB_V1_heuristic_vs_ml.md`
 
-These are useful engineering verification artifacts, but they are still capped local runs rather than full production-scale certification results.
+These are full-corpus local verification artifacts for the signed-off `XGB_V1` path, but they still stop short of full institutional model risk governance.

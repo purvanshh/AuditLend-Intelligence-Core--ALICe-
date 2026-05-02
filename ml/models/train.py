@@ -17,7 +17,7 @@ from statistics import mean
 from typing import Any, Callable, Iterable, Sequence
 
 from ml.data.features import FEATURE_COLUMNS, build_feature_row
-from ml.data.ingestion import ensure_lending_club_data_path, iter_clean_lending_club_rows
+from ml.data.ingestion import DEFAULT_STATUS_MAP, MODELING_COLUMNS, ensure_lending_club_data_path, iter_clean_lending_club_rows
 from ml.data.splits import assign_time_split
 
 MODEL_NUMERIC_FEATURES: tuple[str, ...] = tuple(column for column in FEATURE_COLUMNS if column != "target_defaulted")
@@ -29,6 +29,13 @@ MODEL_CATEGORICAL_FEATURES: tuple[str, ...] = (
     "verification_status",
 )
 DEFAULT_SEARCH_METRIC = "validation_auc_pr"
+OFFICIAL_MODEL_VERSION = "XGB_V1"
+OFFICIAL_MODEL_ARTIFACT_PATH = Path("ml/models/XGB_V1_model.pkl")
+OFFICIAL_CALIBRATOR_ARTIFACT_PATH = Path("ml/models/XGB_V1_calibrator.pkl")
+OFFICIAL_FEATURE_SPEC_PATH = Path("ml/models/XGB_V1_features.json")
+OFFICIAL_MANIFEST_PATH = Path("ml/models/manifest.yaml")
+OFFICIAL_SEARCH_RESULTS_PATH = Path("ml/models/XGB_V1_search_results.jsonl")
+OFFICIAL_INPUT_FEATURES: tuple[str, ...] = MODEL_NUMERIC_FEATURES + MODEL_CATEGORICAL_FEATURES
 
 
 @dataclass(frozen=True)
@@ -128,6 +135,38 @@ class TrainingRunSummary:
     artifact_path: str
     experiment_log_path: str
     manifest_path: str
+
+
+@dataclass(frozen=True)
+class OfficialPreparedDataset:
+    """Vectorized train/validation/test frames for the official XGB_V1 training path."""
+
+    split_frames: dict[str, Any]
+    feature_columns: list[str]
+    split_counts: dict[str, int]
+    data_hash: str
+
+
+@dataclass(frozen=True)
+class OfficialTrainingSummary:
+    """Serializable summary for the signed-off XGB_V1 artifact set."""
+
+    model_version: str
+    created_at: str
+    data_path: str
+    data_hash: str
+    split_counts: dict[str, int]
+    selected_params: dict[str, Any]
+    validation_metrics_raw: dict[str, float | int]
+    validation_metrics_calibrated: dict[str, float | int]
+    test_metrics_raw: dict[str, float | int]
+    test_metrics_calibrated: dict[str, float | int]
+    top_feature_importance: list[dict[str, float]]
+    model_artifact_path: str
+    calibrator_artifact_path: str
+    feature_spec_path: str
+    manifest_path: str
+    search_results_path: str
 
 
 def prepare_training_dataset(
@@ -555,10 +594,456 @@ def metric_set_to_dict(metrics: MetricSet) -> dict[str, float | int]:
     }
 
 
+class OfficialXGBV1Model:
+    """Pickle-friendly preprocessing + XGBoost bundle for the signed-off model."""
+
+    def __init__(self, params: dict[str, Any], *, seed: int = 42) -> None:
+        self.params = dict(params)
+        self.seed = seed
+        self.numeric_features = list(MODEL_NUMERIC_FEATURES)
+        self.categorical_features = list(MODEL_CATEGORICAL_FEATURES)
+        self.input_features = list(OFFICIAL_INPUT_FEATURES)
+        self.preprocessor = None
+        self.classifier = None
+
+    def fit(self, X, y):
+        import pandas as pd
+        from sklearn.compose import ColumnTransformer
+        from sklearn.preprocessing import OneHotEncoder
+        from xgboost import XGBClassifier
+
+        frame = X if hasattr(X, "loc") else pd.DataFrame(list(X), columns=self.input_features)
+        frame = frame.loc[:, self.input_features].copy()
+        self.preprocessor = ColumnTransformer(
+            transformers=[
+                ("numeric", "passthrough", self.numeric_features),
+                (
+                    "categorical",
+                    OneHotEncoder(handle_unknown="ignore", sparse_output=True, dtype="float32"),
+                    self.categorical_features,
+                ),
+            ],
+            remainder="drop",
+            sparse_threshold=1.0,
+        )
+        self.classifier = XGBClassifier(
+            objective="binary:logistic",
+            eval_metric="logloss",
+            random_state=self.seed,
+            n_jobs=4,
+            tree_method="hist",
+            verbosity=0,
+            **self.params,
+        )
+        transformed = self.preprocessor.fit_transform(frame)
+        self.classifier.fit(transformed, list(y))
+        return self
+
+    def predict_proba(self, X):
+        import pandas as pd
+
+        if self.preprocessor is None or self.classifier is None:
+            raise RuntimeError("OfficialXGBV1Model must be fit before prediction.")
+        frame = X if hasattr(X, "loc") else pd.DataFrame(list(X), columns=self.input_features)
+        frame = frame.loc[:, self.input_features].copy()
+        transformed = self.preprocessor.transform(frame)
+        return self.classifier.predict_proba(transformed)
+
+    @property
+    def feature_importances_(self) -> list[float]:
+        if self.classifier is None or not hasattr(self.classifier, "feature_importances_"):
+            return []
+        return [float(value) for value in self.classifier.feature_importances_]
+
+    def get_feature_names(self) -> list[str]:
+        if self.preprocessor is None:
+            return list(self.input_features)
+        categorical = self.preprocessor.named_transformers_.get("categorical")
+        if categorical is None:
+            return list(self.numeric_features)
+        categorical_names = list(categorical.get_feature_names_out(self.categorical_features))
+        return list(self.numeric_features) + categorical_names
+
+
+OfficialXGBV1Model.__module__ = "ml.models.train"
+
+
+def prepare_official_training_dataset(
+    *,
+    env_var: str = "LENDING_CLUB_DATA_PATH",
+    chunk_size: int = 200_000,
+) -> OfficialPreparedDataset:
+    """Load the full Lending Club corpus into PRD-aligned split frames for XGB_V1."""
+
+    import pandas as pd
+
+    data_path = ensure_lending_club_data_path(env_var=env_var)
+    split_parts: dict[str, list[Any]] = {
+        "train": [],
+        "validation": [],
+        "test": [],
+        "holdout": [],
+    }
+    identity_hash = sha256()
+
+    reader = pd.read_csv(
+        data_path,
+        usecols=list(MODELING_COLUMNS),
+        chunksize=chunk_size,
+        low_memory=False,
+    )
+    for raw_chunk in reader:
+        feature_chunk = _build_official_feature_chunk(raw_chunk)
+        if feature_chunk.empty:
+            continue
+        for split_name, mask in _official_split_masks(feature_chunk).items():
+            split_chunk = feature_chunk.loc[mask].copy()
+            if split_chunk.empty:
+                continue
+            split_parts[split_name].append(split_chunk)
+            for row in split_chunk.loc[:, ["loan_id", "target_defaulted", "issue_date"]].itertuples(index=False):
+                identity_hash.update(str(row[0]).encode("utf-8"))
+                identity_hash.update(str(int(row[1])).encode("utf-8"))
+                identity_hash.update(str(row[2]).encode("utf-8"))
+
+    feature_columns = list(OFFICIAL_INPUT_FEATURES)
+    ordered_columns = ["loan_id", "issue_date"] + feature_columns + ["target_defaulted"]
+    split_frames = {
+        split_name: (
+            pd.concat(parts, ignore_index=True).loc[:, ordered_columns]
+            if parts
+            else pd.DataFrame(columns=ordered_columns)
+        )
+        for split_name, parts in split_parts.items()
+    }
+    split_counts = {split_name: int(len(frame)) for split_name, frame in split_frames.items()}
+    return OfficialPreparedDataset(
+        split_frames=split_frames,
+        feature_columns=feature_columns,
+        split_counts=split_counts,
+        data_hash=identity_hash.hexdigest(),
+    )
+
+
+def train_official_xgb_v1(
+    *,
+    env_var: str = "LENDING_CLUB_DATA_PATH",
+    seed: int = 42,
+) -> OfficialTrainingSummary:
+    """Train, calibrate, and persist the official XGB_V1 artifact set."""
+
+    import pandas as pd
+    from sklearn.isotonic import IsotonicRegression
+
+    data_path = ensure_lending_club_data_path(env_var=env_var)
+    prepared_dataset = prepare_official_training_dataset(env_var=env_var)
+    split_frames = prepared_dataset.split_frames
+    train_frame = split_frames["train"]
+    validation_frame = split_frames["validation"]
+    test_frame = split_frames["test"]
+    if train_frame.empty or validation_frame.empty or test_frame.empty:
+        raise RuntimeError("XGB_V1 training requires non-empty train, validation, and test splits.")
+
+    search_train_frame = _deterministic_search_slice(train_frame, max_rows=200_000)
+    search_validation_frame = _deterministic_search_slice(validation_frame, max_rows=60_000)
+    parameter_grid = _expand_grid(
+        {
+            "learning_rate": [0.05, 0.1],
+            "max_depth": [4, 6],
+            "subsample": [0.8, 1.0],
+        }
+    )
+    base_params = {
+        "n_estimators": 200,
+        "colsample_bytree": 0.8,
+        "min_child_weight": 5,
+        "reg_lambda": 1.0,
+    }
+
+    train_X = train_frame.loc[:, OFFICIAL_INPUT_FEATURES]
+    validation_X = validation_frame.loc[:, OFFICIAL_INPUT_FEATURES]
+    test_X = test_frame.loc[:, OFFICIAL_INPUT_FEATURES]
+    search_train_X = search_train_frame.loc[:, OFFICIAL_INPUT_FEATURES]
+    search_validation_X = search_validation_frame.loc[:, OFFICIAL_INPUT_FEATURES]
+    train_y = [int(value) for value in train_frame["target_defaulted"].tolist()]
+    validation_y = [int(value) for value in validation_frame["target_defaulted"].tolist()]
+    test_y = [int(value) for value in test_frame["target_defaulted"].tolist()]
+    search_train_y = [int(value) for value in search_train_frame["target_defaulted"].tolist()]
+    search_validation_y = [int(value) for value in search_validation_frame["target_defaulted"].tolist()]
+
+    search_rows: list[dict[str, Any]] = []
+    best_params: dict[str, Any] | None = None
+    best_metrics: MetricSet | None = None
+
+    for grid_params in parameter_grid:
+        candidate_params = {**base_params, **grid_params}
+        candidate_model = OfficialXGBV1Model(candidate_params, seed=seed)
+        candidate_model.fit(search_train_X, search_train_y)
+        validation_probabilities = predict_probabilities(candidate_model, search_validation_X)
+        validation_metrics = compute_binary_metrics(search_validation_y, validation_probabilities)
+        test_probabilities = predict_probabilities(candidate_model, test_X)
+        test_metrics = compute_binary_metrics(test_y, test_probabilities)
+        search_row = {
+            "candidate_name": OFFICIAL_MODEL_VERSION,
+            "family": "xgboost",
+            "params": candidate_params,
+            "search_train_rows": len(search_train_frame),
+            "search_validation_rows": len(search_validation_frame),
+            "validation_metrics": metric_set_to_dict(validation_metrics),
+            "test_metrics": metric_set_to_dict(test_metrics),
+        }
+        search_rows.append(search_row)
+        if best_metrics is None or (
+            validation_metrics.auc_pr,
+            validation_metrics.auc_roc,
+            -validation_metrics.brier_score,
+        ) > (
+            best_metrics.auc_pr,
+            best_metrics.auc_roc,
+            -best_metrics.brier_score,
+        ):
+            best_params = candidate_params
+            best_metrics = validation_metrics
+
+    if best_params is None or best_metrics is None:
+        raise RuntimeError("No XGB_V1 candidate was evaluated successfully.")
+
+    validation_model = OfficialXGBV1Model(best_params, seed=seed)
+    validation_model.fit(train_X, train_y)
+    validation_probabilities_raw = predict_probabilities(validation_model, validation_X)
+    calibrator = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+    calibrator.fit(list(validation_probabilities_raw), validation_y)
+    validation_probabilities_calibrated = [
+        min(max(float(value), 0.0), 1.0) for value in calibrator.predict(list(validation_probabilities_raw))
+    ]
+
+    combined_frame = pd.concat([train_frame, validation_frame], ignore_index=True)
+    combined_X = combined_frame.loc[:, OFFICIAL_INPUT_FEATURES]
+    combined_y = [int(value) for value in combined_frame["target_defaulted"].tolist()]
+    final_model = OfficialXGBV1Model(best_params, seed=seed)
+    final_model.fit(combined_X, combined_y)
+    test_probabilities_raw = predict_probabilities(final_model, test_X)
+    test_probabilities_calibrated = [
+        min(max(float(value), 0.0), 1.0) for value in calibrator.predict(list(test_probabilities_raw))
+    ]
+
+    OFFICIAL_MODEL_ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with OFFICIAL_MODEL_ARTIFACT_PATH.open("wb") as handle:
+        pickle.dump(final_model, handle)
+    with OFFICIAL_CALIBRATOR_ARTIFACT_PATH.open("wb") as handle:
+        pickle.dump(calibrator, handle)
+
+    feature_spec = {
+        "model_version": OFFICIAL_MODEL_VERSION,
+        "input_feature_columns": list(OFFICIAL_INPUT_FEATURES),
+        "numeric_feature_columns": list(MODEL_NUMERIC_FEATURES),
+        "categorical_feature_columns": list(MODEL_CATEGORICAL_FEATURES),
+        "encoded_feature_names": final_model.get_feature_names(),
+    }
+    OFFICIAL_FEATURE_SPEC_PATH.write_text(json.dumps(feature_spec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    write_experiment_log(OFFICIAL_SEARCH_RESULTS_PATH, search_rows)
+    top_feature_importance = extract_feature_importance(final_model, final_model.get_feature_names())[:25]
+
+    summary = OfficialTrainingSummary(
+        model_version=OFFICIAL_MODEL_VERSION,
+        created_at=datetime.now(UTC).isoformat(),
+        data_path=str(data_path),
+        data_hash=prepared_dataset.data_hash,
+        split_counts=prepared_dataset.split_counts,
+        selected_params=best_params,
+        validation_metrics_raw=metric_set_to_dict(
+            compute_binary_metrics(validation_y, validation_probabilities_raw)
+        ),
+        validation_metrics_calibrated=metric_set_to_dict(
+            compute_binary_metrics(validation_y, validation_probabilities_calibrated)
+        ),
+        test_metrics_raw=metric_set_to_dict(compute_binary_metrics(test_y, test_probabilities_raw)),
+        test_metrics_calibrated=metric_set_to_dict(
+            compute_binary_metrics(test_y, test_probabilities_calibrated)
+        ),
+        top_feature_importance=top_feature_importance,
+        model_artifact_path=str(OFFICIAL_MODEL_ARTIFACT_PATH),
+        calibrator_artifact_path=str(OFFICIAL_CALIBRATOR_ARTIFACT_PATH),
+        feature_spec_path=str(OFFICIAL_FEATURE_SPEC_PATH),
+        manifest_path=str(OFFICIAL_MANIFEST_PATH),
+        search_results_path=str(OFFICIAL_SEARCH_RESULTS_PATH),
+    )
+    OFFICIAL_MANIFEST_PATH.write_text(json.dumps(asdict(summary), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def _build_official_feature_chunk(raw_chunk):
+    import pandas as pd
+
+    frame = raw_chunk.copy()
+    frame["application_type"] = _clean_string_series(frame["application_type"])
+    frame["loan_status"] = _clean_string_series(frame["loan_status"])
+    frame["issue_date"] = pd.to_datetime(frame["issue_d"], format="%b-%Y", errors="coerce")
+
+    mask = (
+        frame["application_type"].eq("Individual")
+        & frame["issue_date"].notna()
+        & frame["loan_status"].isin(DEFAULT_STATUS_MAP)
+    )
+    frame = frame.loc[mask].copy()
+    if frame.empty:
+        return frame
+
+    annual_income = _numeric_series(frame["annual_inc"])
+    loan_amount = _numeric_series(frame["loan_amnt"])
+    term_months = _numeric_series(frame["term"].astype("string").str.extract(r"(\d+)")[0])
+    valid_mask = annual_income.gt(0.0) & loan_amount.notna() & term_months.notna()
+    frame = frame.loc[valid_mask].copy()
+    if frame.empty:
+        return frame
+
+    annual_income = annual_income.loc[valid_mask].astype("float32")
+    loan_amount = loan_amount.loc[valid_mask].astype("float32")
+    term_months = term_months.loc[valid_mask].astype("float32")
+
+    monthly_income = (annual_income / 12.0).astype("float32")
+    dti_pct = _numeric_series(frame["dti"]).clip(lower=0.0).fillna(0.0).astype("float32")
+    estimated_existing_emi = (monthly_income * (dti_pct / 100.0)).astype("float32")
+
+    fico_low = _numeric_series(frame["fico_range_low"]).astype("float32")
+    fico_high = _numeric_series(frame["fico_range_high"]).astype("float32")
+    last_fico_low = _numeric_series(frame["last_fico_range_low"]).astype("float32")
+    last_fico_high = _numeric_series(frame["last_fico_range_high"]).astype("float32")
+    fico_midpoint = ((fico_low.fillna(0.0) + fico_high.fillna(0.0)) / 2.0).astype("float32")
+    last_fico_midpoint = ((last_fico_low.fillna(0.0) + last_fico_high.fillna(0.0)) / 2.0).astype("float32")
+
+    earliest_credit_line = pd.to_datetime(frame["earliest_cr_line"], format="%b-%Y", errors="coerce")
+    credit_history_months = (
+        (frame["issue_date"].dt.year - earliest_credit_line.dt.year) * 12
+        + (frame["issue_date"].dt.month - earliest_credit_line.dt.month)
+    ).fillna(0.0)
+    credit_history_age_years = credit_history_months.clip(lower=0.0).astype("float32") / 12.0
+
+    total_acc = _numeric_series(frame["total_acc"]).fillna(0.0).astype("float32")
+    open_acc = _numeric_series(frame["open_acc"]).fillna(0.0).astype("float32")
+    total_bc_limit = _numeric_series(frame["total_bc_limit"]).fillna(0.0).astype("float32")
+    bc_util_ratio = _ratio_series(_numeric_series(frame["bc_util"]), 100.0).astype("float32")
+
+    engineered = pd.DataFrame(
+        {
+            "loan_id": frame["id"].astype("string").fillna("").str.strip(),
+            "issue_date": frame["issue_date"],
+            "grade": _clean_string_series(frame["grade"]),
+            "sub_grade": _clean_string_series(frame["sub_grade"]),
+            "purpose": _clean_string_series(frame["purpose"]),
+            "home_ownership": _clean_string_series(frame["home_ownership"]),
+            "verification_status": _clean_string_series(frame["verification_status"]),
+            "loan_amount": loan_amount,
+            "funded_amount": _numeric_series(frame["funded_amnt"]).fillna(0.0).astype("float32"),
+            "term_months": term_months,
+            "interest_rate_pct": _numeric_series(frame["int_rate"]).fillna(0.0).astype("float32"),
+            "installment": _numeric_series(frame["installment"]).fillna(0.0).astype("float32"),
+            "monthly_income": monthly_income,
+            "estimated_existing_emi": estimated_existing_emi,
+            "dti_ratio": _ratio_series(dti_pct, 100.0).astype("float32"),
+            "loan_amount_to_income": _ratio_series(loan_amount, monthly_income).astype("float32"),
+            "installment_to_income": _ratio_series(_numeric_series(frame["installment"]), monthly_income).astype("float32"),
+            "existing_emi_to_income": _ratio_series(estimated_existing_emi, monthly_income).astype("float32"),
+            "credit_score_midpoint": fico_midpoint,
+            "credit_score_recent_delta": (last_fico_midpoint - fico_midpoint).astype("float32"),
+            "credit_history_age_years": credit_history_age_years.astype("float32"),
+            "employment_length_years": _employment_length_series(frame["emp_length"]).astype("float32"),
+            "revol_util_ratio": _ratio_series(_numeric_series(frame["revol_util"]), 100.0).astype("float32"),
+            "bc_util_ratio": bc_util_ratio,
+            "all_util_ratio": _ratio_series(_numeric_series(frame["all_util"]), 100.0).astype("float32"),
+            "il_util_ratio": _ratio_series(_numeric_series(frame["il_util"]), 100.0).astype("float32"),
+            "revol_balance_to_income": _ratio_series(_numeric_series(frame["revol_bal"]), monthly_income).astype("float32"),
+            "current_balance_to_income": _ratio_series(_numeric_series(frame["tot_cur_bal"]), monthly_income).astype("float32"),
+            "total_balance_to_income": _ratio_series(_numeric_series(frame["total_bal_ex_mort"]), monthly_income).astype("float32"),
+            "total_rev_limit_to_income": _ratio_series(_numeric_series(frame["total_rev_hi_lim"]), monthly_income).astype("float32"),
+            "total_bc_limit_to_income": _ratio_series(total_bc_limit, monthly_income).astype("float32"),
+            "credit_card_headroom_ratio": (1.0 - bc_util_ratio).clip(lower=0.0).astype("float32"),
+            "delinquency_burden": _ratio_series(_numeric_series(frame["delinq_2yrs"]), total_acc).astype("float32"),
+            "recent_inquiry_pressure": _ratio_series(_numeric_series(frame["inq_last_6mths"]), 6.0).astype("float32"),
+            "credit_inquiry_velocity": _ratio_series(_numeric_series(frame["inq_last_12m"]), 12.0).astype("float32"),
+            "open_account_density": _ratio_series(open_acc, total_acc).astype("float32"),
+            "accounts_per_year": _ratio_series(total_acc, credit_history_age_years).astype("float32"),
+            "balance_per_open_account": _ratio_series(_numeric_series(frame["tot_cur_bal"]), open_acc).astype("float32"),
+            "mortgage_account_share": _ratio_series(_numeric_series(frame["mort_acc"]), total_acc).astype("float32"),
+            "bankruptcy_flag": _numeric_series(frame["pub_rec_bankruptcies"]).fillna(0.0).gt(0.0).astype("float32"),
+            "tax_lien_flag": _numeric_series(frame["tax_liens"]).fillna(0.0).gt(0.0).astype("float32"),
+            "high_utilization_fraction": _ratio_series(_numeric_series(frame["percent_bc_gt_75"]), 100.0).astype("float32"),
+            "never_delinquent_ratio": _ratio_series(_numeric_series(frame["pct_tl_nvr_dlq"]), 100.0).astype("float32"),
+            "collections_12m": _numeric_series(frame["collections_12_mths_ex_med"]).fillna(0.0).astype("float32"),
+            "recent_revolving_trade_gap_months": _numeric_series(frame["mo_sin_rcnt_rev_tl_op"]).fillna(0.0).astype("float32"),
+            "revolving_trade_age_years": _ratio_series(_numeric_series(frame["mo_sin_old_rev_tl_op"]), 12.0).astype("float32"),
+            "open_revolving_24m": _numeric_series(frame["open_rv_24m"]).fillna(0.0).astype("float32"),
+            "open_installment_24m": _numeric_series(frame["open_il_24m"]).fillna(0.0).astype("float32"),
+            "target_defaulted": frame["loan_status"].map(DEFAULT_STATUS_MAP).astype("int8"),
+        }
+    )
+    for feature_name in MODEL_CATEGORICAL_FEATURES:
+        engineered[feature_name] = engineered[feature_name].astype("category")
+    return engineered
+
+
+def _official_split_masks(feature_frame):
+    issue_year = feature_frame["issue_date"].dt.year
+    return {
+        "train": issue_year.le(2016),
+        "validation": issue_year.eq(2017),
+        "test": issue_year.eq(2018),
+        "holdout": issue_year.gt(2018),
+    }
+
+
+def _clean_string_series(series):
+    return series.astype("string").fillna("").str.strip().replace("", "UNKNOWN")
+
+
+def _numeric_series(series):
+    import pandas as pd
+
+    return pd.to_numeric(series, errors="coerce")
+
+
+def _ratio_series(numerator, denominator):
+    numerator_values = _numeric_series(numerator).fillna(0.0).astype("float32")
+    if isinstance(denominator, (int, float)):
+        denominator_values = float(denominator)
+        if denominator_values == 0.0:
+            return numerator_values * 0.0
+        result = numerator_values / denominator_values
+        return result.replace([float("inf"), float("-inf")], 0.0).fillna(0.0)
+    denominator_values = _numeric_series(denominator).fillna(0.0).astype("float32")
+    result = numerator_values.divide(denominator_values.where(denominator_values != 0.0, other=1.0))
+    return result.where(denominator_values != 0.0, other=0.0).replace([float("inf"), float("-inf")], 0.0).fillna(0.0)
+
+
+def _employment_length_series(series):
+    cleaned = series.astype("string").fillna("").str.strip()
+    mapped = cleaned.replace(
+        {
+            "< 1 year": "0.5",
+            "10+ years": "10",
+        },
+        regex=False,
+    )
+    extracted = mapped.str.extract(r"([0-9]+(?:\.[0-9]+)?)")[0]
+    return _numeric_series(extracted).fillna(0.0)
+
+
+def _deterministic_search_slice(frame, *, max_rows: int):
+    if len(frame) <= max_rows:
+        return frame
+    stride = max(len(frame) // max_rows, 1)
+    sliced = frame.iloc[::stride].head(max_rows).copy()
+    if len(sliced) < max_rows:
+        return frame.head(max_rows).copy()
+    return sliced
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for `python -m ml.models.train`."""
 
     parser = argparse.ArgumentParser(description="Train Phase 3 AuditLend ML candidates.")
+    parser.add_argument("--official-xgb-v1", action="store_true")
     parser.add_argument("--max-rows-per-split", type=int, default=None)
     parser.add_argument("--modulo-sampling", type=int, default=1)
     parser.add_argument("--search-metric", default=DEFAULT_SEARCH_METRIC)
@@ -574,6 +1059,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point for the Phase 3 trainer."""
 
     args = parse_args(argv)
+    if args.official_xgb_v1:
+        summary = train_official_xgb_v1(seed=args.seed)
+        print(json.dumps(asdict(summary), indent=2, sort_keys=True))
+        return 0
     config = TrainingConfig(
         seed=args.seed,
         search_metric=args.search_metric,
@@ -640,6 +1129,10 @@ def _as_model_input(
     X: Sequence[Sequence[float]],
     feature_names: Sequence[str] | None = None,
 ):
+    if hasattr(X, "loc"):
+        if feature_names is None:
+            return X
+        return X.loc[:, list(feature_names)]
     if feature_names is None:
         return list(X)
     try:

@@ -20,33 +20,35 @@
 
 - The repository now includes a held-out evaluation workflow in `ml/models/evaluate.py`.
 - Evaluation reports include AUC-ROC, AUC-PR, Brier score, expected calibration error, threshold tables, and candidate-family comparison.
-- The current local smoke evaluation run `20260502T184238Z-smoke3` reported:
-  - Test AUC-ROC: `0.975706`
-  - Test AUC-PR: `0.944672`
-  - Test Brier score: `0.026101`
-  - Test ECE: `0.027782`
+- The official `XGB_V1` evaluation run on the PRD-aligned full split reported:
+  - Raw test AUC-ROC: `0.975786`
+  - Calibrated test AUC-ROC: `0.975664`
+  - Raw test Brier score: `0.026582`
+  - Calibrated test Brier score: `0.025293`
+  - Raw test ECE: `0.016177`
+  - Calibrated test ECE: `0.003550`
 
 ## ML Calibration Scaffold (2026-05-03)
 
 - The repository now includes isotonic calibration in `ml/models/calibrate.py`.
 - Calibration is fit on the validation split and then re-evaluated on the held-out test split before any downstream use.
 - Each calibration run persists the calibrator artifact and emits before/after reliability reports plus SVG calibration curves.
-- The current smoke calibration run did **not** improve the held-out capped sample materially:
-  - Raw test ECE: `0.027782`
-  - Calibrated test ECE: `0.027866`
-  - Raw test Brier: `0.026101`
-  - Calibrated test Brier: `0.026105`
+- The official `XGB_V1` calibrator materially improved held-out test calibration:
+  - Raw test ECE: `0.016177`
+  - Calibrated test ECE: `0.003550`
+  - Raw test Brier: `0.026582`
+  - Calibrated test Brier: `0.025293`
 
 ## ML Benchmark Snapshot (2026-05-03)
 
 - The benchmark script `ml/benchmark/heuristic_vs_ml.py` compares the heuristic control against the deployed ML strategy on the held-out test split.
-- The local smoke benchmark run `20260502T184238Z-smoke3` reported:
-  - Heuristic approval rate: `0.8050`
-  - ML approval rate: `0.6800`
-  - Heuristic default rate on approved loans: `0.1429`
-  - ML default rate on approved loans: `0.0147`
-  - Simulated profit delta, ML minus heuristic: `223661.00`
-- These are capped smoke-run numbers, not final production sign-off metrics.
+- The official `XGB_V1` benchmark at threshold `0.50` reported:
+  - Heuristic approval rate: `0.851371`
+  - ML approval rate: `0.857526`
+  - Heuristic default rate on approved loans: `0.150550`
+  - ML default rate on approved loans: `0.023498`
+  - Simulated profit delta, ML minus heuristic: `68294107.00`
+- On this held-out benchmark, `XGB_V1` achieved both a modestly higher approval rate and a materially lower approved-loan default rate.
 
 ## Adding A New Rule Set
 

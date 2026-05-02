@@ -16,7 +16,14 @@ from engine.rules import Decision, evaluate
 from engine.scoring import compute_risk_score
 from ml.governance.ab_test import ABTestReport, OutcomeRecord, summarize_outcomes
 from ml.models.evaluate import find_latest_manifest, load_manifest, load_model_artifact
-from ml.models.train import predict_probabilities, prepare_training_dataset
+from ml.models.train import (
+    OFFICIAL_INPUT_FEATURES,
+    OFFICIAL_MANIFEST_PATH,
+    OFFICIAL_MODEL_VERSION,
+    predict_probabilities,
+    prepare_official_training_dataset,
+    prepare_training_dataset,
+)
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,54 @@ def benchmark_manifest(
     )
 
 
+def benchmark_official_xgb_v1(
+    *,
+    manifest_path: str | Path = OFFICIAL_MANIFEST_PATH,
+    ml_threshold: float = 0.5,
+    env_var: str = "LENDING_CLUB_DATA_PATH",
+    report_dir: str | Path = "ml/benchmark/reports",
+) -> BenchmarkReport:
+    """Benchmark heuristic control against the signed-off XGB_V1 model."""
+
+    manifest = load_manifest(manifest_path)
+    prepared_dataset = prepare_official_training_dataset(env_var=env_var)
+    test_split = prepared_dataset.split_frames["test"]
+    if test_split.empty:
+        raise RuntimeError("The official test split is empty; benchmark cannot run.")
+
+    model = load_model_artifact(manifest["model_artifact_path"])
+    calibrator = load_model_artifact(manifest["calibrator_artifact_path"])
+    raw_probabilities = predict_probabilities(model, test_split.loc[:, OFFICIAL_INPUT_FEATURES])
+    calibrated_probabilities = [min(max(float(value), 0.0), 1.0) for value in calibrator.predict(list(raw_probabilities))]
+
+    rows: list[OutcomeRecord] = []
+    feature_rows = test_split.to_dict(orient="records")
+    for feature_row, calibrated_probability in zip(feature_rows, calibrated_probabilities, strict=True):
+        heuristic_outcome = _heuristic_outcome(feature_row)
+        ml_outcome = _ml_threshold_outcome(
+            feature_row,
+            calibrated_probability=calibrated_probability,
+            threshold=ml_threshold,
+        )
+        rows.append(heuristic_outcome)
+        rows.append(ml_outcome)
+
+    ab_report = summarize_outcomes(rows, ml_ratio=0.5)
+    report_dir_path = Path(report_dir)
+    report_dir_path.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir_path / f"{OFFICIAL_MODEL_VERSION}_heuristic_vs_ml.md"
+    write_benchmark_report(report_path, manifest, ab_report, confidence_threshold=ml_threshold)
+    return BenchmarkReport(
+        run_id=str(manifest.get("model_version", OFFICIAL_MODEL_VERSION)),
+        manifest_path=str(Path(manifest_path)),
+        selected_candidate=str(manifest.get("model_version", OFFICIAL_MODEL_VERSION)),
+        row_count=len(test_split),
+        confidence_threshold=ml_threshold,
+        ab_report=ab_report.to_dict(),
+        report_path=str(report_path),
+    )
+
+
 def write_benchmark_report(
     report_path: str | Path,
     manifest: dict[str, Any],
@@ -105,18 +160,20 @@ def write_benchmark_report(
 
     heuristic = next(row for row in ab_report.arms if row.arm == "heuristic")
     ml = next(row for row in ab_report.arms if row.arm == "ml")
+    run_label = str(manifest.get("run_id", manifest.get("model_version", "unknown")))
+    selected_label = str(manifest.get("selected_candidate", manifest.get("model_version", "unknown")))
 
     lines = [
         "# Phase 9 Heuristic vs ML Benchmark",
         "",
-        f"Run ID: `{manifest['run_id']}`",
-        f"Selected candidate: `{manifest['selected_candidate']}`",
-        f"Confidence threshold: `{confidence_threshold:.2f}`",
+        f"Run ID: `{run_label}`",
+        f"Selected candidate: `{selected_label}`",
+        f"Threshold: `{confidence_threshold:.2f}`",
         "",
         "## Assumptions",
         "",
         "- Heuristic benchmark uses a deterministic income-stability proxy derived from the engineered feature set.",
-        "- ML benchmark uses calibrated probabilities when available and falls back to the heuristic decision when model confidence is below threshold.",
+        "- ML benchmark uses calibrated probabilities when available.",
         "- Simulated profit uses `+12%` of loan amount for performing approved loans and `-65%` loss given default for approved loans that default.",
         "",
         "## Arm Comparison",
@@ -150,15 +207,24 @@ def write_benchmark_report(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark heuristic versus deployed ML scoring.")
+    parser.add_argument("--official-xgb-v1", action="store_true")
     parser.add_argument("--manifest-path", default=None)
     parser.add_argument("--max-rows-per-split", type=int, default=None)
     parser.add_argument("--modulo-sampling", type=int, default=1)
     parser.add_argument("--confidence-threshold", type=float, default=0.6)
+    parser.add_argument("--ml-threshold", type=float, default=0.5)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.official_xgb_v1:
+        report = benchmark_official_xgb_v1(
+            manifest_path=Path(args.manifest_path) if args.manifest_path else OFFICIAL_MANIFEST_PATH,
+            ml_threshold=float(args.ml_threshold),
+        )
+        print(json.dumps(asdict(report), indent=2, sort_keys=True))
+        return 0
     manifest_path = Path(args.manifest_path) if args.manifest_path else find_latest_manifest()
     report = benchmark_manifest(
         manifest_path,
@@ -238,6 +304,24 @@ def _proxy_income_stability(feature_row: dict[str, Any]) -> float:
     inquiry_pressure = float(feature_row.get("recent_inquiry_pressure", 0.0))
     proxy = (headroom * 0.4) + (clean_history * 0.4) + ((1.0 - min(emi_burden, 1.0)) * 0.15) + ((1.0 - min(inquiry_pressure, 1.0)) * 0.05)
     return min(max(proxy, 0.0), 1.0)
+
+
+def _ml_threshold_outcome(
+    feature_row: dict[str, Any],
+    *,
+    calibrated_probability: float,
+    threshold: float,
+) -> OutcomeRecord:
+    approved = float(calibrated_probability) < threshold
+    decision = Decision.APPROVE if approved else Decision.DECLINE
+    return OutcomeRecord(
+        arm="ml",
+        decision=decision.value,
+        confidence=max(float(calibrated_probability), 1.0 - float(calibrated_probability)),
+        defaulted=int(feature_row.get("target_defaulted", 0)),
+        loan_amount=float(feature_row.get("loan_amount", 0.0)),
+        scoring_strategy="xgb_v1_threshold",
+    )
 
 
 def _apply_optional_calibrator(calibrator_path: Path, raw_probabilities: Sequence[float]) -> list[float]:

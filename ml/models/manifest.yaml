@@ -1,0 +1,156 @@
+{
+  "calibrator_artifact_path": "ml/models/XGB_V1_calibrator.pkl",
+  "created_at": "2026-05-02T20:04:24.855874+00:00",
+  "data_hash": "cc711558520bb931e9499fc6ca50255b0b3ec06842be9371d8fb6596c2bc87d0",
+  "data_path": "/Users/purvansh/Desktop/Projects/AuditLend Intelligence Core (ALICe)/ml/data/raw/Lending Club Loan Data/accepted_2007_to_2018q4.csv/accepted_2007_to_2018Q4.csv",
+  "feature_spec_path": "ml/models/XGB_V1_features.json",
+  "manifest_path": "ml/models/manifest.yaml",
+  "model_artifact_path": "ml/models/XGB_V1_model.pkl",
+  "model_version": "XGB_V1",
+  "search_results_path": "ml/models/XGB_V1_search_results.jsonl",
+  "selected_params": {
+    "colsample_bytree": 0.8,
+    "learning_rate": 0.05,
+    "max_depth": 6,
+    "min_child_weight": 5,
+    "n_estimators": 200,
+    "reg_lambda": 1.0,
+    "subsample": 0.8
+  },
+  "split_counts": {
+    "holdout": 0,
+    "test": 49230,
+    "train": 1116769,
+    "validation": 156290
+  },
+  "test_metrics_calibrated": {
+    "auc_pr": 0.936609,
+    "auc_roc": 0.975664,
+    "brier_score": 0.025293,
+    "positive_rate": 0.151737,
+    "row_count": 49230
+  },
+  "test_metrics_raw": {
+    "auc_pr": 0.936718,
+    "auc_roc": 0.975786,
+    "brier_score": 0.026582,
+    "positive_rate": 0.151737,
+    "row_count": 49230
+  },
+  "top_feature_importance": [
+    {
+      "feature": "credit_score_recent_delta",
+      "importance": 0.35809827
+    },
+    {
+      "feature": "grade_A",
+      "importance": 0.12332106
+    },
+    {
+      "feature": "grade_B",
+      "importance": 0.06082303
+    },
+    {
+      "feature": "term_months",
+      "importance": 0.058017
+    },
+    {
+      "feature": "interest_rate_pct",
+      "importance": 0.04164733
+    },
+    {
+      "feature": "grade_C",
+      "importance": 0.0308588
+    },
+    {
+      "feature": "credit_score_midpoint",
+      "importance": 0.02582905
+    },
+    {
+      "feature": "all_util_ratio",
+      "importance": 0.02547945
+    },
+    {
+      "feature": "open_revolving_24m",
+      "importance": 0.02186508
+    },
+    {
+      "feature": "grade_D",
+      "importance": 0.021409
+    },
+    {
+      "feature": "il_util_ratio",
+      "importance": 0.01268713
+    },
+    {
+      "feature": "loan_amount_to_income",
+      "importance": 0.01119503
+    },
+    {
+      "feature": "funded_amount",
+      "importance": 0.01093631
+    },
+    {
+      "feature": "existing_emi_to_income",
+      "importance": 0.00899617
+    },
+    {
+      "feature": "loan_amount",
+      "importance": 0.00854035
+    },
+    {
+      "feature": "balance_per_open_account",
+      "importance": 0.0084225
+    },
+    {
+      "feature": "bankruptcy_flag",
+      "importance": 0.00722046
+    },
+    {
+      "feature": "installment_to_income",
+      "importance": 0.00712258
+    },
+    {
+      "feature": "employment_length_years",
+      "importance": 0.00586577
+    },
+    {
+      "feature": "sub_grade_C1",
+      "importance": 0.00572587
+    },
+    {
+      "feature": "sub_grade_A1",
+      "importance": 0.00536825
+    },
+    {
+      "feature": "home_ownership_MORTGAGE",
+      "importance": 0.00520473
+    },
+    {
+      "feature": "home_ownership_RENT",
+      "importance": 0.00498208
+    },
+    {
+      "feature": "total_rev_limit_to_income",
+      "importance": 0.00474772
+    },
+    {
+      "feature": "revolving_trade_age_years",
+      "importance": 0.00450931
+    }
+  ],
+  "validation_metrics_calibrated": {
+    "auc_pr": 0.938553,
+    "auc_roc": 0.978663,
+    "brier_score": 0.037094,
+    "positive_rate": 0.227948,
+    "row_count": 156290
+  },
+  "validation_metrics_raw": {
+    "auc_pr": 0.937731,
+    "auc_roc": 0.978503,
+    "brier_score": 0.038992,
+    "positive_rate": 0.227948,
+    "row_count": 156290
+  }
+}

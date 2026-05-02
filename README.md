@@ -14,23 +14,23 @@ Last verified locally: **2026-05-03**
 | Unit suite | PASS | `./.venv/bin/pytest tests/unit -q` -> `140 passed` |
 | Integration + chaos slice | PASS | `./.venv/bin/pytest tests/integration tests/chaos -q` -> `2 passed`, `17 skipped` |
 | Coverage report | INFO | `./.venv/bin/pytest tests -q --cov=api --cov=engine --cov=ml --cov=services --cov=worker --cov-report=term` -> `78%` |
-| Phase 9 benchmark smoke | PASS | `python -m ml.benchmark.heuristic_vs_ml --manifest-path ml/models/experiments/20260502T184238Z-smoke3/manifest.json --max-rows-per-split 200 --modulo-sampling 64` |
+| Official XGB_V1 benchmark | PASS | `python -m ml.benchmark.heuristic_vs_ml --official-xgb-v1 --ml-threshold 0.5` |
 
-The current focused ML smoke benchmark from the May 3, 2026 verification run:
+The current official ML benchmark from the May 3, 2026 verification run:
 
 ```json
 {
   "heuristic": {
-    "approval_rate": 0.805,
-    "default_rate_on_approved": 0.142857,
-    "simulated_profit": -17195.0
+    "approval_rate": 0.851371,
+    "default_rate_on_approved": 0.15055,
+    "simulated_profit": -9354600.5
   },
   "ml": {
-    "approval_rate": 0.68,
-    "default_rate_on_approved": 0.014706,
-    "simulated_profit": 206466.0
+    "approval_rate": 0.857526,
+    "default_rate_on_approved": 0.023498,
+    "simulated_profit": 58939506.5
   },
-  "profit_delta_ml_minus_heuristic": 223661.0
+  "profit_delta_ml_minus_heuristic": 68294107.0
 }
 ```
 
@@ -182,31 +182,38 @@ For the full ML workflow, including training, calibration, explanation, registry
 
 ## ML Model Performance
 
-The latest local smoke-scale ML artifacts were produced from the capped run `20260502T184238Z-smoke3`. These are useful as engineering verification signals, not as final production certification numbers.
+The repository now includes an official signed-off artifact set under `ml/models/`:
 
-Held-out evaluation metrics from `ml/models/reports/20260502T184238Z-smoke3_evaluation.md`:
+- `ml/models/XGB_V1_model.pkl`
+- `ml/models/XGB_V1_calibrator.pkl`
+- `ml/models/XGB_V1_features.json`
+- `ml/models/manifest.yaml`
 
-- Test AUC-ROC: `0.975706`
-- Test AUC-PR: `0.944672`
-- Test Brier score: `0.026101`
-- Test ECE: `0.027782`
+Those artifacts were trained on the full modeled Lending Club corpus with the PRD-aligned split:
 
-Calibration metrics from `ml/models/reports/20260502T184238Z-smoke3_calibration.md`:
+| Split | Rows |
+| --- | ---: |
+| Train (2007-2016) | 1,116,769 |
+| Validation (2017) | 156,290 |
+| Test (2018) | 49,230 |
 
-- Raw test ECE: `0.027782`
-- Calibrated test ECE: `0.027866`
-- Raw test Brier: `0.026101`
-- Calibrated test Brier: `0.026105`
+Held-out evaluation metrics from `ml/models/reports/XGB_V1_evaluation.md`:
 
-Benchmark metrics from `ml/benchmark/reports/20260502T184238Z-smoke3_heuristic_vs_ml.md`:
+| Metric | Raw Test | Calibrated Test |
+| --- | ---: | ---: |
+| AUC-ROC | `0.975786` | `0.975664` |
+| AUC-PR | `0.936718` | `0.936609` |
+| Brier score | `0.026582` | `0.025293` |
+| ECE | `0.016177` | `0.003550` |
 
-- Heuristic approval rate: `0.8050`
-- ML approval rate: `0.6800`
-- Heuristic default rate on approved loans: `0.1429`
-- ML default rate on approved loans: `0.0147`
-- Simulated profit delta, ML minus heuristic: `223661.00`
+Benchmark metrics from `ml/benchmark/reports/XGB_V1_heuristic_vs_ml.md` at the `0.50` calibrated default-probability threshold:
 
-These numbers come from a capped `200`-row test split with deterministic local scoring assumptions, so they should be treated as implementation smoke results rather than final business sign-off.
+| Arm | Approval Rate | Default Rate on Approved | Simulated Profit |
+| --- | ---: | ---: | ---: |
+| Heuristic | `0.851371` | `0.150550` | `-9354600.50` |
+| XGB_V1 | `0.857526` | `0.023498` | `58939506.50` |
+
+On this held-out 2018 benchmark, `XGB_V1` improved both headline PRD directions at the chosen threshold: approval rate increased by `0.006155` while default rate on approved loans dropped by `0.127052`.
 
 Install ML-only dependencies separately from the core API/runtime stack:
 

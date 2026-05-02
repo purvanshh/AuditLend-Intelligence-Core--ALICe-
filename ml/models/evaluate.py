@@ -14,11 +14,15 @@ from typing import Any, Iterable, Sequence
 
 from ml.models.train import (
     MetricSet,
+    OFFICIAL_INPUT_FEATURES,
+    OFFICIAL_MANIFEST_PATH,
+    OFFICIAL_MODEL_VERSION,
     PreparedDataset,
     TrainingConfig,
     compute_binary_metrics,
     metric_set_to_dict,
     predict_probabilities,
+    prepare_official_training_dataset,
     prepare_training_dataset,
 )
 
@@ -105,6 +109,20 @@ class EvaluationReport:
     top_feature_importance: list[dict[str, float]]
     segment_diagnostics: list[dict[str, Any]]
     report_path: str
+
+
+@dataclass(frozen=True)
+class OfficialEvaluationReport:
+    """Evaluation summary for the signed-off XGB_V1 artifact set."""
+
+    model_version: str
+    manifest_path: str
+    report_path: str
+    split_counts: dict[str, int]
+    selected_params: dict[str, Any]
+    raw_splits: dict[str, dict[str, Any]]
+    calibrated_splits: dict[str, dict[str, Any]]
+    top_feature_importance: list[dict[str, float]]
 
 
 def load_manifest(manifest_path: str | Path) -> dict[str, Any]:
@@ -535,10 +553,105 @@ def find_latest_manifest(experiment_dir: str | Path = "ml/models/experiments") -
     return manifest_paths[-1]
 
 
+def evaluate_official_xgb_v1(
+    *,
+    manifest_path: str | Path = OFFICIAL_MANIFEST_PATH,
+    env_var: str = "LENDING_CLUB_DATA_PATH",
+    report_dir: str | Path = "ml/models/reports",
+    ece_bins: int = DEFAULT_ECE_BINS,
+) -> OfficialEvaluationReport:
+    """Evaluate the official XGB_V1 artifact set on the PRD-aligned splits."""
+
+    manifest = load_manifest(manifest_path)
+    model = load_model_artifact(manifest["model_artifact_path"])
+    calibrator = load_model_artifact(manifest["calibrator_artifact_path"])
+    prepared_dataset = prepare_official_training_dataset(env_var=env_var)
+
+    raw_summaries: dict[str, dict[str, Any]] = {}
+    calibrated_summaries: dict[str, dict[str, Any]] = {}
+    for split_name in ("train", "validation", "test"):
+        split_frame = prepared_dataset.split_frames[split_name]
+        probabilities_raw = predict_probabilities(model, split_frame.loc[:, OFFICIAL_INPUT_FEATURES])
+        probabilities_calibrated = [
+            min(max(float(value), 0.0), 1.0) for value in calibrator.predict(list(probabilities_raw))
+        ]
+        y_true = [int(value) for value in split_frame["target_defaulted"].tolist()]
+        raw_summaries[split_name] = {
+            "metrics": metric_set_to_dict(compute_binary_metrics(y_true, probabilities_raw)),
+            "calibration": asdict(compute_expected_calibration_error(y_true, probabilities_raw, bins=ece_bins)),
+        }
+        calibrated_summaries[split_name] = {
+            "metrics": metric_set_to_dict(compute_binary_metrics(y_true, probabilities_calibrated)),
+            "calibration": asdict(compute_expected_calibration_error(y_true, probabilities_calibrated, bins=ece_bins)),
+        }
+
+    report_dir_path = Path(report_dir)
+    report_dir_path.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir_path / f"{OFFICIAL_MODEL_VERSION}_evaluation.md"
+    report = OfficialEvaluationReport(
+        model_version=str(manifest.get("model_version", OFFICIAL_MODEL_VERSION)),
+        manifest_path=str(Path(manifest_path)),
+        report_path=str(report_path),
+        split_counts={name: int(count) for name, count in manifest["split_counts"].items()},
+        selected_params=dict(manifest["selected_params"]),
+        raw_splits=raw_summaries,
+        calibrated_splits=calibrated_summaries,
+        top_feature_importance=list(manifest.get("top_feature_importance", [])),
+    )
+    write_official_evaluation_report(report_path, report)
+    return report
+
+
+def write_official_evaluation_report(output_path: str | Path, report: OfficialEvaluationReport) -> Path:
+    """Write a markdown evaluation report for the official XGB_V1 model."""
+
+    lines = [
+        "# Official XGB_V1 Evaluation Report",
+        "",
+        f"Model version: `{report.model_version}`",
+        f"Manifest: `{report.manifest_path}`",
+        "",
+        "## Split Metrics",
+        "",
+        "| Split | Variant | AUC-ROC | AUC-PR | Brier | ECE | Max Gap | Rows |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for split_name in ("train", "validation", "test"):
+        for variant_name, split_map in (("raw", report.raw_splits), ("calibrated", report.calibrated_splits)):
+            metrics = split_map[split_name]["metrics"]
+            calibration = split_map[split_name]["calibration"]
+            lines.append(
+                f"| {split_name} | {variant_name} | {metrics['auc_roc']:.6f} | {metrics['auc_pr']:.6f} | "
+                f"{metrics['brier_score']:.6f} | {calibration['ece']:.6f} | {calibration['max_calibration_gap']:.6f} | "
+                f"{metrics['row_count']} |"
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Selected Parameters",
+            "",
+            f"`{json.dumps(report.selected_params, sort_keys=True)}`",
+            "",
+            "## Top Feature Importance",
+            "",
+            "| Feature | Importance |",
+            "| --- | ---: |",
+        ]
+    )
+    for row in report.top_feature_importance[:15]:
+        lines.append(f"| {row['feature']} | {row['importance']:.8f} |")
+
+    path = Path(output_path)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for `python -m ml.models.evaluate`."""
 
     parser = argparse.ArgumentParser(description="Evaluate a trained Phase 3 model artifact.")
+    parser.add_argument("--official-xgb-v1", action="store_true")
     parser.add_argument("--manifest-path", default=None)
     parser.add_argument("--experiment-dir", default="ml/models/experiments")
     parser.add_argument("--max-rows-per-split", type=int, default=None)
@@ -552,6 +665,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point for evaluation."""
 
     args = parse_args(argv)
+    if args.official_xgb_v1:
+        report = evaluate_official_xgb_v1(
+            manifest_path=Path(args.manifest_path) if args.manifest_path else OFFICIAL_MANIFEST_PATH,
+            report_dir=args.report_dir,
+            ece_bins=args.ece_bins,
+        )
+        print(json.dumps(asdict(report), indent=2, sort_keys=True))
+        return 0
     manifest_path = Path(args.manifest_path) if args.manifest_path else find_latest_manifest(args.experiment_dir)
     report = evaluate_manifest(
         manifest_path,

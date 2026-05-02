@@ -7,7 +7,7 @@ Generated on 2026-05-02 from `/Users/purvansh/Desktop/Projects/AuditLend Intelli
 - Raw corpus: Lending Club accepted loans.
 - Modeling filter: `application_type == Individual`.
 - Outcome filter: keep only terminal statuses that can be labeled deterministically as defaulted or non-defaulted.
-- Working split strategy: train <= 2015-12-31, validation <= 2017-12-31, test <= 2018-12-31.
+- Working split strategy: train <= 2016-12-31, validation <= 2017-12-31, test <= 2018-12-31.
 
 ## Row Counts
 

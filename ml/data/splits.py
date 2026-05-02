@@ -9,9 +9,9 @@ from typing import Any, Iterable
 
 @dataclass(frozen=True)
 class TimeSplitBoundaries:
-    """Working split boundaries for the 2007-2018Q4 Lending Club corpus."""
+    """PRD-aligned split boundaries for the 2007-2018Q4 Lending Club corpus."""
 
-    train_end: date = date(2015, 12, 31)
+    train_end: date = date(2016, 12, 31)
     validation_end: date = date(2017, 12, 31)
     test_end: date = date(2018, 12, 31)
 
