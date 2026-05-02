@@ -80,7 +80,7 @@ dmypy.json
 .pytype/
 
 # Data and ML
-data/
+/data/
 ml/data/raw/*
 !ml/data/raw/.gitkeep
 *.csv.gz
