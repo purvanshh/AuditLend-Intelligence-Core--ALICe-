@@ -156,6 +156,25 @@ Celery Worker
 | `mock_apis/` | Deterministic external-provider mocks |
 | `tests/` | Unit, integration, and chaos tests |
 | `docs/CALIBRATION.md` | Current scorecard calibration status and rule-set governance notes |
+| `ml/` | Phase 1 ML foundation, dataset docs, and training scaffolding |
+
+## ML Data Setup
+
+The Lending Club training dataset lives under `ml/data/raw/` and is intentionally excluded from git and Docker image layers.
+
+Set the dataset path with:
+
+```bash
+export LENDING_CLUB_DATA_PATH="ml/data/raw/accepted_2007_to_2018Q4.csv.gz"
+```
+
+If your local Kaggle export is still unpacked into nested folders, point `LENDING_CLUB_DATA_PATH` at the real CSV path instead. See `ml/data/README.md` for the canonical path and download notes.
+
+Install ML-only dependencies separately from the core API/runtime stack:
+
+```bash
+pip install -r requirements-ml.txt
+```
 
 ## Quick Start
 

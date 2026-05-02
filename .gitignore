@@ -79,9 +79,11 @@ dmypy.json
 .pyre/
 .pytype/
 
-# Data and ML (for future calibration/models)
+# Data and ML
 data/
-ml/data/
+ml/data/raw/*
+!ml/data/raw/.gitkeep
+*.csv.gz
 *.pkl
 *.h5
 *.model
