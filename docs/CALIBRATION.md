@@ -15,6 +15,12 @@
 - Evaluation reports include AUC-ROC, AUC-PR, Brier score, expected calibration error, threshold tables, and candidate-family comparison.
 - This is still pre-calibration infrastructure: isotonic/Platt calibration is the next phase before any model should be treated as empirically calibrated probability-of-default.
 
+## ML Calibration Scaffold (2026-05-03)
+
+- The repository now includes isotonic calibration in `ml/models/calibrate.py`.
+- Calibration is fit on the validation split and then re-evaluated on the held-out test split before any downstream use.
+- Each calibration run persists the calibrator artifact and emits before/after reliability reports plus SVG calibration curves.
+
 ## Adding A New Rule Set
 
 1. Create a new immutable `RuleSet` instance in `engine/rule_sets.py` with a unique version.

@@ -49,3 +49,28 @@ Evaluation outputs:
 - split metrics with AUC-ROC, AUC-PR, Brier score, and ECE
 - threshold tables for confusion-matrix analysis
 - model-family comparison from the Phase 3 search log
+
+## Phase 5 Calibration
+
+Fit isotonic regression on the validation split and persist the calibrator with:
+
+```bash
+python -m ml.models.calibrate
+```
+
+Or calibrate a specific run:
+
+```bash
+python -m ml.models.calibrate \
+  --manifest-path ml/models/experiments/<run_id>/manifest.json \
+  --max-rows-per-split 50000 \
+  --modulo-sampling 8
+```
+
+Calibration outputs:
+
+- `ml/models/artifacts/<run_id>/isotonic_calibrator.pkl`
+- `ml/models/artifacts/<run_id>/isotonic_calibration_manifest.json`
+- `ml/models/reports/<run_id>_calibration.md`
+- `ml/models/reports/<run_id>_validation_calibration.svg`
+- `ml/models/reports/<run_id>_test_calibration.svg`
