@@ -89,6 +89,33 @@ def test_explanation_endpoint_reads_from_audit_trail(api_client, clean_database)
         )
         write_audit_entry(
             application_id=application_id,
+            step="ML_SCORING",
+            output_snapshot={
+                "model_version": "XGB_V1",
+                "model_summary": (
+                    "Model factors: Debt-To-Income Ratio (42.0%) increased predicted default risk, "
+                    "while Credit Score (720) reduced predicted default risk."
+                ),
+                "model_factor_contributions": [
+                    {
+                        "feature_name": "Debt-To-Income Ratio",
+                        "raw_value": "42.0%",
+                        "shap_contribution": 0.182,
+                        "direction": "increase_default_risk",
+                    },
+                    {
+                        "feature_name": "Credit Score",
+                        "raw_value": "720",
+                        "shap_contribution": -0.149,
+                        "direction": "decrease_default_risk",
+                    },
+                ],
+            },
+            rule_version="RULE_SET_V2",
+            session=session,
+        )
+        write_audit_entry(
+            application_id=application_id,
             step="DECISION_CALCULATION",
             input_snapshot={"user_data": {"pan": "***REDACTED***"}},
             output_snapshot={
@@ -113,4 +140,7 @@ def test_explanation_endpoint_reads_from_audit_trail(api_client, clean_database)
     body = response.json()
     assert body["decision"] == "NEEDS_REVIEW"
     assert "insufficient reliable data" in body["summary"]
+    assert "Model factors:" in body["summary"]
+    assert body["model_version"] == "XGB_V1"
+    assert body["model_factor_contributions"][0]["feature_name"] == "Debt-To-Income Ratio"
     assert body["timeline"][0]["step"] == "CREDIT_BUREAU_FETCH"

@@ -9,6 +9,13 @@ class ExplanationFactor(BaseModel):
     status: str
 
 
+class ModelFactorContribution(BaseModel):
+    feature_name: str
+    raw_value: str
+    shap_contribution: float
+    direction: str
+
+
 class TimelineEntry(BaseModel):
     step: str
     status: str
@@ -20,6 +27,8 @@ class ExplanationResponse(BaseModel):
     decision: str | None = None
     summary: str
     factors: list[ExplanationFactor] = Field(default_factory=list)
+    model_factor_contributions: list[ModelFactorContribution] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
     rule_version: str | None = None
+    model_version: str | None = None
     generated_at: datetime

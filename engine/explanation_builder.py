@@ -13,15 +13,18 @@ def build_explanation(audit_entries: list[AuditLog], decision_output: dict[str, 
     confidence = decision_output.get("confidence")
     rule_version = decision_output.get("rule_version")
     factors = _factor_objects(decision_output.get("factors", []))
+    model_details = _model_details(audit_entries, decision_output)
     timeline = [_timeline_entry(entry) for entry in audit_entries]
-    summary = _summary(decision, confidence, audit_entries, decision_output)
+    summary = _summary(decision, confidence, audit_entries, decision_output, model_details)
 
     return {
         "decision": decision,
         "summary": summary,
         "factors": factors,
+        "model_factor_contributions": model_details["model_factor_contributions"],
         "timeline": timeline,
         "rule_version": rule_version,
+        "model_version": model_details["model_version"],
         "generated_at": datetime.now(UTC),
     }
 
@@ -31,6 +34,7 @@ def _summary(
     confidence: float | None,
     audit_entries: list[AuditLog],
     decision_output: dict[str, Any],
+    model_details: dict[str, Any],
 ) -> str:
     degraded_steps = [
         entry
@@ -45,17 +49,23 @@ def _summary(
     if decision == "NEEDS_REVIEW" and threshold_reason:
         causes = _degradation_sentence(degraded_steps)
         confidence_text = _confidence_text(confidence)
-        return (
+        summary = (
             f"The system had insufficient reliable data to make an automatic decision. "
             f"{causes} Confidence {confidence_text} is below the required threshold, "
             "so this application has been sent for manual review."
         )
+        return _append_model_summary(summary, model_details)
 
     if degraded_steps:
         causes = _degradation_sentence(degraded_steps)
-        return f"Decision {decision} was produced with degraded data quality. {causes} Confidence is {_confidence_text(confidence)}."
+        summary = (
+            f"Decision {decision} was produced with degraded data quality. "
+            f"{causes} Confidence is {_confidence_text(confidence)}."
+        )
+        return _append_model_summary(summary, model_details)
 
-    return f"Decision {decision} was produced from verified data sources with confidence {_confidence_text(confidence)}."
+    summary = f"Decision {decision} was produced from verified data sources with confidence {_confidence_text(confidence)}."
+    return _append_model_summary(summary, model_details)
 
 
 def _degradation_sentence(entries: list[AuditLog]) -> str:
@@ -99,3 +109,90 @@ def _timeline_entry(entry: AuditLog) -> dict[str, Any]:
 
 def _confidence_text(confidence: float | None) -> str:
     return "unknown" if confidence is None else f"{confidence:.2f}"
+
+
+def _model_details(audit_entries: list[AuditLog], decision_output: dict[str, Any]) -> dict[str, Any]:
+    payload = _model_payload_from_decision(decision_output)
+    if payload["model_factor_contributions"] or payload["model_version"]:
+        return payload
+
+    for entry in reversed(audit_entries):
+        if entry.step == "ML_SCORING" and entry.output_snapshot:
+            return _model_payload_from_decision(entry.output_snapshot)
+
+    return {
+        "model_factor_contributions": [],
+        "model_summary": None,
+        "model_version": None,
+    }
+
+
+def _model_payload_from_decision(payload: dict[str, Any]) -> dict[str, Any]:
+    contributions = []
+    for row in payload.get("model_factor_contributions", []):
+        if not isinstance(row, dict):
+            continue
+        feature_name = str(row.get("feature_name") or "").strip()
+        if not feature_name:
+            continue
+        shap_value = float(row.get("shap_contribution", 0.0))
+        direction = str(row.get("direction") or ("increase_default_risk" if shap_value >= 0 else "decrease_default_risk"))
+        contributions.append(
+            {
+                "feature_name": feature_name,
+                "raw_value": str(row.get("raw_value", "unknown")),
+                "shap_contribution": round(shap_value, 6),
+                "direction": direction,
+            }
+        )
+
+    return {
+        "model_factor_contributions": contributions,
+        "model_summary": payload.get("model_summary") or _model_summary_from_contributions(contributions),
+        "model_version": payload.get("model_version"),
+    }
+
+
+def _append_model_summary(summary: str, model_details: dict[str, Any]) -> str:
+    model_summary = model_details.get("model_summary")
+    if not model_summary:
+        return summary
+    return f"{summary} {model_summary}"
+
+
+def _model_summary_from_contributions(contributions: list[dict[str, Any]]) -> str | None:
+    if not contributions:
+        return None
+
+    ranked = sorted(contributions, key=lambda row: -abs(float(row["shap_contribution"])))
+    increases = [row for row in ranked if row["direction"] == "increase_default_risk"][:2]
+    decreases = [row for row in ranked if row["direction"] == "decrease_default_risk"][:1]
+
+    fragments: list[str] = []
+    if increases:
+        fragments.append(
+            _serialise_model_fragment(
+                increases,
+                "increased predicted default risk",
+            )
+        )
+    if decreases:
+        fragments.append(
+            _serialise_model_fragment(
+                decreases,
+                "reduced predicted default risk",
+            )
+        )
+
+    if not fragments:
+        return None
+    if len(fragments) == 1:
+        return f"Model factors: {fragments[0]}."
+    return f"Model factors: {fragments[0]}, while {fragments[1]}."
+
+
+def _serialise_model_fragment(rows: list[dict[str, Any]], trailing_text: str) -> str:
+    phrases = [f"{row['feature_name']} ({row['raw_value']})" for row in rows]
+    if len(phrases) == 1:
+        return f"{phrases[0]} {trailing_text}"
+    return f"{', '.join(phrases[:-1])} and {phrases[-1]} {trailing_text}"
