@@ -873,21 +873,6 @@ Current calibration status:
 - `docker-compose.yml` does not run API with `--reload`; dev reload belongs in `docker-compose.dev.yml`.
 - The local stack intentionally keeps infrastructure simple. Production deployment should move secrets, TLS, identity, logging retention, container hardening, and network policy into the target platform.
 
-## Definition of Done
-
-The implementation items below reflect the **current repository state as of May 3, 2026**. Git merge state depends on your branch workflow, so the checklist tracks implementation and verification status rather than PR status.
-
-- [x] All six implementation phases are complete in the current repository state.
-- [x] `ml.models.train` runs end to end and produces an `XGB_V1` artifact.
-- [x] `XGB_V1` outperforms `RULE_SET_V1` on the held-out test set with AUC-ROC `0.975664` and Brier `0.025293`.
-- [x] AuditLend smoke tests pass with ML enabled via environment flag.
-- [x] `/explanation` includes SHAP contributions for ML decisions.
-- [x] The A/B benchmark script outputs a clean summary.
-- [x] The drift detector fires an alert on shifted feature data and records `DRIFT_DETECTED` in the audit path.
-- [x] `README.md` is updated and `docs/CALIBRATION.md` is revised.
-- [x] The repository test suite passes with coverage `86%`.
-- [x] The project name, repository structure, and end-to-end ML pipeline are documented with factually correct current numbers.
-
 ## Project Principles
 
 - Determinism beats hidden randomness.
