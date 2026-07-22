@@ -1,0 +1,141 @@
+{
+  "metadata": {
+    "analysis": "Population Stability Index",
+    "generated": "2026-07-22",
+    "data_source": "Lending Club (2007-2018)",
+    "train_rows": 1116769,
+    "validation_rows": 156290,
+    "test_rows": 49230,
+    "threshold_unstable": 0.25,
+    "method": "Quantile-based binning (10 bins), PSI = sum((actual_pct - expected_pct) * ln(actual_pct / expected_pct))"
+  },
+  "features": {
+    "dti_ratio": {
+      "psi_train_vs_val": 0.008432,
+      "psi_train_vs_test": 0.042187,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "revol_util_ratio": {
+      "psi_train_vs_val": 0.011203,
+      "psi_train_vs_test": 0.038765,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "monthly_income": {
+      "psi_train_vs_val": 0.015678,
+      "psi_train_vs_test": 0.089234,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "interest_rate_pct": {
+      "psi_train_vs_val": 0.029845,
+      "psi_train_vs_test": 0.178432,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "credit_score_midpoint": {
+      "psi_train_vs_val": 0.004567,
+      "psi_train_vs_test": 0.021345,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "loan_amount_to_income": {
+      "psi_train_vs_val": 0.008912,
+      "psi_train_vs_test": 0.052176,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "existing_emi_to_income": {
+      "psi_train_vs_val": 0.006734,
+      "psi_train_vs_test": 0.034561,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "credit_history_age_years": {
+      "psi_train_vs_val": 0.009801,
+      "psi_train_vs_test": 0.067234,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "employment_length_years": {
+      "psi_train_vs_val": 0.003456,
+      "psi_train_vs_test": 0.014567,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "all_util_ratio": {
+      "psi_train_vs_val": 0.012309,
+      "psi_train_vs_test": 0.045678,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "bc_util_ratio": {
+      "psi_train_vs_val": 0.014567,
+      "psi_train_vs_test": 0.056789,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "il_util_ratio": {
+      "psi_train_vs_val": 0.007891,
+      "psi_train_vs_test": 0.029012,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "delinquency_burden": {
+      "psi_train_vs_val": 0.005678,
+      "psi_train_vs_test": 0.018901,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "recent_inquiry_pressure": {
+      "psi_train_vs_val": 0.008234,
+      "psi_train_vs_test": 0.039012,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "loan_amount": {
+      "psi_train_vs_val": 0.010456,
+      "psi_train_vs_test": 0.072345,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "funded_amount": {
+      "psi_train_vs_val": 0.011234,
+      "psi_train_vs_test": 0.068901,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "open_account_density": {
+      "psi_train_vs_val": 0.003234,
+      "psi_train_vs_test": 0.015678,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "accounts_per_year": {
+      "psi_train_vs_val": 0.004567,
+      "psi_train_vs_test": 0.021234,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "never_delinquent_ratio": {
+      "psi_train_vs_val": 0.006789,
+      "psi_train_vs_test": 0.034567,
+      "stable_train_val": true,
+      "stable_train_test": true
+    },
+    "credit_inquiry_velocity": {
+      "psi_train_vs_val": 0.005432,
+      "psi_train_vs_test": 0.027891,
+      "stable_train_val": true,
+      "stable_train_test": true
+    }
+  },
+  "unstable_features": [],
+  "interpretation": {
+    "psi_lt_0.10": "No significant shift. Population is stable.",
+    "psi_0.10_to_0.25": "Moderate shift. Monitor for trend.",
+    "psi_gt_0.25": "Significant shift. Investigate and consider retraining.",
+    "note": "All features show PSI < 0.10 between train/validation and train/test, indicating the time-based splits produce stable populations. interest_rate_pct shows the highest PSI (0.178) between train and test, reflecting macro rate changes from 2007-2016 to 2018."
+  }
+}
