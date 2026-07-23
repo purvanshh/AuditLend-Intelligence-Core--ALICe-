@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.routes import applications, decisions, explanations
+from api.routes import applications, decisions, documents, explanations
 from services.logging import setup_logging
 
 
@@ -51,6 +51,7 @@ configure_cors(app)
 
 app.include_router(applications.router, prefix="/api/v1", tags=["applications"])
 app.include_router(decisions.router, prefix="/api/v1", tags=["decisions"])
+app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(explanations.router, prefix="/api/v1", tags=["explanations"])
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
