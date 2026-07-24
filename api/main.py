@@ -11,7 +11,8 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.routes import applications, decisions, documents, explanations
+from api.auth import RequestSizeLimitMiddleware, SecurityHeadersMiddleware, rate_limiter
+from api.routes import applications, batch, decisions, documents, explanations, monitoring
 from services.logging import setup_logging
 
 
@@ -47,12 +48,17 @@ def configure_cors(target_app: FastAPI) -> None:
 
 validate_required_env()
 app = FastAPI(title="AuditLend API", version="2.0.0")
+
+app.add_middleware(RequestSizeLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 configure_cors(app)
 
 app.include_router(applications.router, prefix="/api/v1", tags=["applications"])
 app.include_router(decisions.router, prefix="/api/v1", tags=["decisions"])
 app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 app.include_router(explanations.router, prefix="/api/v1", tags=["explanations"])
+app.include_router(batch.router, prefix="/api/v1", tags=["batch"])
+app.include_router(monitoring.router, prefix="/api/v1", tags=["monitoring"])
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
@@ -101,8 +107,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "healthy", "service": "auditlend-api", "version": "2.0.0"}
+def health() -> dict[str, str | bool]:
+    from api.auth import OAUTH_AVAILABLE
+
+    return {
+        "status": "healthy",
+        "service": "auditlend-api",
+        "version": "2.0.0",
+        "auth_api_key": True,
+        "auth_oidc_available": OAUTH_AVAILABLE,
+        "rate_limiter": f"{rate_limiter.max_requests} req/{rate_limiter.window_seconds}s",
+        "max_request_size_bytes": os.environ.get("MAX_REQUEST_SIZE_BYTES", "1048576"),
+    }
 
 
 def _problem_response(

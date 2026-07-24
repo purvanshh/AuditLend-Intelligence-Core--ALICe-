@@ -43,6 +43,18 @@ task_failures = Counter(
     ["task_name", "error_type"],
 )
 
+mlflow_runs_total = Counter(
+    "auditlend_mlflow_runs_total",
+    "Total MLflow experiment runs",
+    ["status"],
+)
+
+mlflow_runs_failed_total = Counter(
+    "auditlend_mlflow_runs_failed_total",
+    "Failed MLflow experiment runs",
+    ["error_type"],
+)
+
 drift_alerts_total = Counter(
     "auditlend_drift_alerts_total",
     "Feature drift alerts raised by the ML governance layer",
@@ -61,11 +73,60 @@ ab_decisions_total = Counter(
     ["arm", "decision", "scoring_strategy"],
 )
 
+rate_limit_exceeded_total = Counter(
+    "auditlend_rate_limit_exceeded_total",
+    "Rate limit exceeded",
+    ["client_key"],
+)
+
+auth_attempts_total = Counter(
+    "auditlend_auth_attempts_total",
+    "Auth attempts",
+    ["method", "result"],
+)
+
 ab_decision_confidence = Histogram(
     "auditlend_ab_decision_confidence",
     "Decision confidence scores grouped by A/B arm",
     ["arm"],
     buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+)
+
+drift_reports_generated_total = Counter(
+    "auditlend_drift_reports_total",
+    "Drift reports generated",
+    ["format"],
+)
+
+drift_alerts_evidently_total = Counter(
+    "auditlend_drift_alerts_evidently_total",
+    "Evidently drift alerts",
+    ["feature"],
+)
+
+
+prediction_cache_hits_total = Counter(
+    "auditlend_prediction_cache_hits_total",
+    "Prediction cache hits",
+    [],
+)
+
+prediction_cache_misses_total = Counter(
+    "auditlend_prediction_cache_misses_total",
+    "Prediction cache misses",
+    [],
+)
+
+prediction_cache_size = Gauge(
+    "auditlend_prediction_cache_size",
+    "Prediction cache entries",
+    [],
+)
+
+batch_prediction_duration_seconds = Histogram(
+    "auditlend_batch_prediction_duration_seconds",
+    "Batch prediction duration",
+    ["batch_size"],
 )
 
 
