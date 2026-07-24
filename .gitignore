@@ -92,3 +92,9 @@ ml/models/experiments/*
 !ml/models/experiments/.gitkeep
 ml/models/artifacts/*
 !ml/models/artifacts/.gitkeep
+
+# Generated reports
+/monitoring/
+ml/monitoring/reports/
+mlruns/
+mlflow.db
