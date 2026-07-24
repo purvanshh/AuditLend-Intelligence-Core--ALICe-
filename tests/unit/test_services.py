@@ -134,7 +134,7 @@ async def test_circuit_half_open_recovers_on_success(monkeypatch: pytest.MonkeyP
             json={
                 "pan": PAN,
                 "credit_score": 780,
-                "last_updated": "2026-04-01T00:00:00Z",
+                "last_updated": "2026-07-01T00:00:00Z",
                 "request_id": "credit-ok",
             },
         )
