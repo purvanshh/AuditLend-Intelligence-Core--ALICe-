@@ -5,7 +5,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth import require_auth
+from api.auth import RateLimiter, require_auth
 from api.dependencies import get_async_session
 from services.document_parser import (
     extract_bank_statement_features,
@@ -28,7 +28,7 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 @router.post(
     "/apply-loan/documents",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(RateLimiter())],
 )
 async def upload_document(
     file: UploadFile = File(...),

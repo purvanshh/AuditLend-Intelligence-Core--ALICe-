@@ -93,6 +93,19 @@ services:
       EXTERNAL_API_TIMEOUT_SECONDS: "30.0"
       TASK_TIMEOUT_SECONDS: "60"
       PROCESSING_LOCK_TIMEOUT_SECONDS: "300"
+      # OIDC / OAuth2
+      # OIDC_ISSUER: ${OIDC_ISSUER:-}
+      # OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      # OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      # Rate limiting
+      # RATE_LIMIT_MAX_REQUESTS: "100"
+      # RATE_LIMIT_WINDOW_SECONDS: "60"
+      # Max request size
+      # MAX_REQUEST_SIZE_BYTES: "1048576"
+      # Vault
+      # VAULT_URL: ${VAULT_URL:-}
+      # VAULT_TOKEN: ${VAULT_TOKEN:-}
+      # VAULT_MOUNT_POINT: ${VAULT_MOUNT_POINT:-secret}
       LOG_LEVEL: INFO
     depends_on:
       postgres:
@@ -176,5 +189,19 @@ services:
       redis:
         condition: service_healthy
 
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.20.0
+    command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
+  mlflow_data:

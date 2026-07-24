@@ -16,3 +16,5 @@ pytest-cov==6.0.*
 cryptography==44.0.*
 prometheus-fastapi-instrumentator==7.0.*
 greenlet==3.1.*
+# python-jose[cryptography]>=3.3,<4.0  # OAuth2/OIDC JWT validation
+# hvac>=2.0,<3.0  # HashiCorp Vault

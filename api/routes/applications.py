@@ -10,7 +10,7 @@ import structlog
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth import require_auth, require_read
+from api.auth import RateLimiter, require_auth, require_read
 from api.dependencies import get_async_session
 from api.schemas.application import ApplyLoanRequest, ApplyLoanResponse, StatusResponse
 from models.application import LoanApplication
@@ -27,7 +27,7 @@ logger = structlog.get_logger()
     "/apply-loan",
     response_model=ApplyLoanResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(RateLimiter())],
 )
 async def apply_loan(
     request: ApplyLoanRequest,
