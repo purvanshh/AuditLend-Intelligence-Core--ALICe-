@@ -10,16 +10,47 @@ import pytest
 from ml.experiment_tracking import ExperimentTracker, MLFLOW_AVAILABLE, get_tracker
 
 
-def test_mflow_available_flag() -> None:
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _disabled_tracker(tmp_path: Path, **kwargs) -> ExperimentTracker:
+    """Create a tracker with MLflow disabled, regardless of install status."""
+    return ExperimentTracker(
+        registry_path=str(tmp_path / "registry.json"),
+        enabled=False,
+        **kwargs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# MLFLOW_AVAILABLE flag
+# ---------------------------------------------------------------------------
+
+
+def test_mlflow_available_flag() -> None:
+    # The flag must be a bool and must match whether mlflow can actually be imported.
     from ml.experiment_tracking import MLFLOW_AVAILABLE as flag
-    assert flag is False
+    try:
+        import mlflow as _mlflow  # noqa: F401
+        expected = True
+    except ImportError:
+        expected = False
+    assert flag is expected
 
 
-def test_experiment_tracker_init_without_mlflow(tmp_path: Path) -> None:
+# ---------------------------------------------------------------------------
+# ExperimentTracker initialisation
+# ---------------------------------------------------------------------------
+
+
+def test_experiment_tracker_init_disabled(tmp_path: Path) -> None:
     tracker = ExperimentTracker(
         tracking_uri="http://localhost:5000",
         experiment_name="test_experiment",
         registry_path=str(tmp_path / "registry.json"),
+        enabled=False,
     )
     assert tracker.experiment_name == "test_experiment"
     assert tracker.registry.registry_path == tmp_path / "registry.json"
@@ -40,8 +71,13 @@ def test_experiment_tracker_init_with_mlflow_enabled(tmp_path: Path) -> None:
         mock_mlflow.set_experiment.assert_called_once_with("test_experiment")
 
 
-def test_start_run_noop_when_mlflow_unavailable(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+# ---------------------------------------------------------------------------
+# start_run
+# ---------------------------------------------------------------------------
+
+
+def test_start_run_noop_when_disabled(tmp_path: Path) -> None:
+    tracker = _disabled_tracker(tmp_path)
     with tracker.start_run(run_name="test_run") as run:
         assert run is None
 
@@ -64,8 +100,13 @@ def test_start_run_with_mlflow(tmp_path: Path) -> None:
         mock_mlflow.start_run.assert_called_once_with(run_name="test_run", tags={"env": "test"}, nested=False)
 
 
-def test_log_params_noop_when_mlflow_unavailable(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+# ---------------------------------------------------------------------------
+# log_params / log_metrics
+# ---------------------------------------------------------------------------
+
+
+def test_log_params_noop_when_disabled(tmp_path: Path) -> None:
+    tracker = _disabled_tracker(tmp_path)
     tracker.log_params_from_dict({"learning_rate": 0.1, "max_depth": 6})
     tracker.log_metrics_from_dict({"auc_roc": 0.85})
 
@@ -86,8 +127,13 @@ def test_log_params_with_mlflow(tmp_path: Path) -> None:
         mock_mlflow.log_metrics.assert_called_once_with({"auc_roc": 0.85, "auc_pr": 0.82}, step=1)
 
 
-def test_log_artifact_noop_when_mlflow_unavailable(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+# ---------------------------------------------------------------------------
+# log_artifact
+# ---------------------------------------------------------------------------
+
+
+def test_log_artifact_noop_when_disabled(tmp_path: Path) -> None:
+    tracker = _disabled_tracker(tmp_path)
     tracker.log_artifact("/tmp/nonexistent.txt")
 
 
@@ -106,8 +152,13 @@ def test_log_artifact_with_mlflow(tmp_path: Path) -> None:
         mock_mlflow.log_artifact.assert_called_once_with(str(artifact_file))
 
 
-def test_log_model_noop_when_mlflow_unavailable(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+# ---------------------------------------------------------------------------
+# log_model
+# ---------------------------------------------------------------------------
+
+
+def test_log_model_noop_when_disabled(tmp_path: Path) -> None:
+    tracker = _disabled_tracker(tmp_path)
     tracker.log_model(None, "model")
 
 
@@ -127,8 +178,13 @@ def test_log_model_with_mlflow(tmp_path: Path) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# register_version
+# ---------------------------------------------------------------------------
+
+
 def test_register_version_creates_file_registry_record(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+    tracker = _disabled_tracker(tmp_path)
     manifest_path = _write_manifest(tmp_path / "v1_manifest.json")
 
     record = tracker.register_version("XGB_V1", manifest_path)
@@ -157,8 +213,13 @@ def test_register_version_with_mlflow_tags_run(tmp_path: Path) -> None:
         mock_mlflow.set_tag.assert_any_call("selected_candidate", "lightgbm")
 
 
-def test_load_model_falls_back_to_file_when_mlflow_unavailable(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+# ---------------------------------------------------------------------------
+# load_model
+# ---------------------------------------------------------------------------
+
+
+def test_load_model_falls_back_to_file_when_disabled(tmp_path: Path) -> None:
+    tracker = _disabled_tracker(tmp_path)
     manifest_path = _write_manifest(
         tmp_path / "v1_manifest.json",
         artifact_path=str(tmp_path / "nonexistent.pkl"),
@@ -189,8 +250,13 @@ def test_load_model_with_mlflow_uses_model_registry(tmp_path: Path) -> None:
         mock_mlflow.xgboost.load_model.assert_called_once_with("models:/XGB_V1/latest")
 
 
-def test_search_runs_empty_when_mlflow_unavailable(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+# ---------------------------------------------------------------------------
+# search_runs
+# ---------------------------------------------------------------------------
+
+
+def test_search_runs_empty_when_disabled(tmp_path: Path) -> None:
+    tracker = _disabled_tracker(tmp_path)
     runs = tracker.search_runs(max_results=5)
     assert runs == []
 
@@ -208,6 +274,11 @@ def test_search_runs_with_mlflow(tmp_path: Path) -> None:
         runs = tracker.search_runs(max_results=5)
         assert runs == ["run1", "run2"]
         mock_mlflow.search_runs.assert_called_once_with(max_results=5)
+
+
+# ---------------------------------------------------------------------------
+# get_tracker singleton
+# ---------------------------------------------------------------------------
 
 
 def test_get_tracker_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,13 +310,18 @@ def test_get_tracker_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.undo()
 
 
+# ---------------------------------------------------------------------------
+# list_versions
+# ---------------------------------------------------------------------------
+
+
 def test_list_versions_empty(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+    tracker = _disabled_tracker(tmp_path)
     assert tracker.list_versions() == []
 
 
 def test_list_versions_after_registration(tmp_path: Path) -> None:
-    tracker = ExperimentTracker(registry_path=str(tmp_path / "registry.json"))
+    tracker = _disabled_tracker(tmp_path)
     v1 = _write_manifest(tmp_path / "v1.json", run_id="v1", auc_roc=0.81)
     v2 = _write_manifest(tmp_path / "v2.json", run_id="v2", auc_roc=0.85)
 
@@ -256,6 +332,11 @@ def test_list_versions_after_registration(tmp_path: Path) -> None:
     assert len(versions) == 2
     assert versions[0].model_version == "V1"
     assert versions[1].model_version == "V2"
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
 
 
 def _write_manifest(

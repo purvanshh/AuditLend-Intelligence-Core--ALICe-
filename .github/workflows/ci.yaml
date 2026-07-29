@@ -47,6 +47,8 @@ jobs:
       API_KEYS: test-api-key-for-ci:read-write
       CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8000
       EXTERNAL_API_TIMEOUT_SECONDS: "30.0"
+      MLFLOW_TRACKING_URI: "file:./mlruns"
+      MLFLOW_ENABLED: "false"
 
     steps:
       - uses: actions/checkout@v4
