@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import pickle
+import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -84,6 +86,83 @@ def test_reload_functionality(tmp_path: Path) -> None:
     assert not loader.is_ready()
     loader.wait_ready(timeout=10.0)
     assert loader.is_ready()
+
+
+def test_reload_loads_fresh_model_instance(tmp_path: Path) -> None:
+    model_path = tmp_path / "model.pkl"
+    with model_path.open("wb") as handle:
+        pickle.dump(_FakeModel(), handle)
+    manifest_path = _write_fake_manifest(tmp_path, str(model_path))
+
+    loader = AsyncModelLoader(manifest_path, preload=True)
+    loader.wait_ready(timeout=10.0)
+    first_model = loader.get_model(timeout=1.0)
+
+    loader.reload()
+    loader.wait_ready(timeout=10.0)
+    second_model = loader.get_model(timeout=1.0)
+
+    assert second_model is not first_model
+
+
+def test_reload_during_inflight_load_discards_stale_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model_path = tmp_path / "model.pkl"
+    with model_path.open("wb") as handle:
+        pickle.dump(_FakeModel(), handle)
+    manifest_path = _write_fake_manifest(tmp_path, str(model_path))
+
+    loader = AsyncModelLoader(manifest_path, preload=False)
+    real_load = loader.load_model
+    entered = threading.Event()
+    gate = threading.Event()
+
+    def slow_load() -> Any:
+        entered.set()
+        assert gate.wait(timeout=5.0)
+        return real_load()
+
+    monkeypatch.setattr(loader, "load_model", slow_load)
+    loader._start_loader()
+    assert entered.wait(timeout=5.0)
+
+    loader.reload()
+    gate.set()
+
+    assert loader.wait_ready(timeout=10.0)
+    assert loader.is_ready()
+    assert isinstance(loader.get_model(timeout=1.0), _FakeModel)
+
+
+def test_reload_retries_failed_stale_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    model_path = tmp_path / "model.pkl"
+    with model_path.open("wb") as handle:
+        pickle.dump(_FakeModel(), handle)
+    manifest_path = _write_fake_manifest(tmp_path, str(model_path))
+
+    loader = AsyncModelLoader(manifest_path, preload=False)
+    real_load = loader.load_model
+    entered = threading.Event()
+    gate = threading.Event()
+    state = {"fail_first": True}
+
+    def flaky_load() -> Any:
+        entered.set()
+        assert gate.wait(timeout=5.0)
+        if state["fail_first"]:
+            raise RuntimeError("transient failure")
+        return real_load()
+
+    monkeypatch.setattr(loader, "load_model", flaky_load)
+    loader._start_loader()
+    assert entered.wait(timeout=5.0)
+
+    loader.reload()
+    state["fail_first"] = False
+    gate.set()
+
+    assert loader.wait_ready(timeout=10.0)
+    assert loader.is_ready()
+    assert isinstance(loader.get_model(timeout=1.0), _FakeModel)
 
 
 def test_graceful_missing_manifest(tmp_path: Path) -> None:
